@@ -1,48 +1,82 @@
-import pandas as pd
-import chess
-from tqdm import tqdm
+# interpret2.py
+# SAN/一部UCIを安全に解釈しつつ、途中手で複数局面をサンプリング→ material diffs を出力
+import argparse
 from pathlib import Path
+import pandas as pd
 
-IN_GAMES = Path("data") / "games.csv"              # movesとwinnerがあるCSV想定
-OUT_POS   = Path("data") / "processed_positions.csv"
+def sanitize_tokens(moves_str: str):
+    toks = []
+    for raw in str(moves_str).split():
+        t = raw.replace("...", "")           # 黒手マーク省く
+        if t.endswith("."): continue         # 手数 "12." を除外
+        if t.replace(".", "").isdigit():     # "12" なども除外
+            continue
+        toks.append(t)
+    return toks
 
-OUT_POS.parent.mkdir(parents=True, exist_ok=True)
+def material_diffs(board):
+    import chess
+    def diff(pt): return len(board.pieces(pt, chess.WHITE)) - len(board.pieces(pt, chess.BLACK))
+    return {
+        "pawn_diff":   diff(chess.PAWN),
+        "bishop_diff": diff(chess.BISHOP),
+        "rook_diff":   diff(chess.ROOK),
+        "knight_diff": diff(chess.KNIGHT),
+        "queen_diff":  diff(chess.QUEEN),
+    }
 
-df = pd.read_csv(IN_GAMES)
-assert {"moves","winner"}.issubset(df.columns), "data/games.csv に moves, winner 列が必要です"
+def main():
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--in", dest="inp", default="data/games_clean.csv")
+    ap.add_argument("--out", default="data/processed_positions.csv")
+    ap.add_argument("--max-samples-per-game", type=int, default=10)
+    args=ap.parse_args()
 
-records = []
-for _, row in tqdm(df.iterrows(), total=len(df)):
-    moves_str = str(row["moves"])
-    winner_raw = str(row["winner"])
-    if winner_raw not in ("white","black"):
-        continue
-    board = chess.Board()
-    moves = moves_str.split()
+    try:
+        import chess
+    except ImportError:
+        raise SystemExit("[ERROR] `pip install chess` が必要です。")
 
-    # サンプリングする手数インデックス（分割サンプリング）
-    indices = [len(moves)//d for d in range(1, 21) if len(moves)//d > 0]
-    indices = sorted(set(indices))  # ← ここが元のバグ（.sort未実行）への修正
+    df = pd.read_csv(args.inp)
+    if not {"winner","moves"}.issubset(df.columns):
+        raise SystemExit("[ERROR] 入力に winner/moves 列が必要です。")
 
-    mv_count = 0
-    for mv in moves:
-        try:
-            board.push_san(mv)
-        except Exception:
-            break
-        mv_count += 1
-        if mv_count in indices:
-            def diff(ptype):
-                return len(board.pieces(ptype, chess.WHITE)) - len(board.pieces(ptype, chess.BLACK))
-            records.append({
-                "winner": winner_raw,                 # 後で 1/0 に
-                "pawn_diff":   diff(chess.PAWN),
-                "bishop_diff": diff(chess.BISHOP),
-                "rook_diff":   diff(chess.ROOK),
-                "knight_diff": diff(chess.KNIGHT),    # ← night_diff（誤綴）修正
-                "queen_diff":  diff(chess.QUEEN),
-            })
+    rows=[]
+    for _, row in df.iterrows():
+        winner_bin = int(row["winner"])
+        toks = sanitize_tokens(row["moves"])
+        if not toks: continue
 
-feature_df = pd.DataFrame.from_records(records)
-feature_df.to_csv(OUT_POS, index=False)
-print(f"[OK] positions -> {OUT_POS}  rows={len(feature_df)}")
+        board = chess.Board()
+        # サンプリング位置（均等目安）
+        if args.max_samples_per_game > 0:
+            k = max(1, min(args.max_samples_per_game, len(toks)))
+            idxs = sorted(set(max(1, i*len(toks)//k) for i in range(1, k+1)))
+        else:
+            idxs = list(range(1, len(toks)+1))
+
+        mv_count=0
+        for tok in toks:
+            try:
+                # SAN優先、失敗したらUCI解釈を試す
+                try:
+                    board.push_san(tok)
+                except Exception:
+                    board.push_uci(tok)
+            except Exception:
+                break  # その対局はこれ以上進めない
+            mv_count += 1
+            if mv_count in idxs:
+                feat = material_diffs(board)
+                rows.append({
+                    "winner": winner_bin,
+                    **feat,
+                })
+
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(out, index=False, encoding="utf-8")
+    print(f"[OK] positions -> {out}  rows={len(rows)}")
+
+if __name__=="__main__":
+    main()

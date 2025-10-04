@@ -1,12 +1,19 @@
 [project]
 name = "chess-engine"
 version = "0.1.0"
-description = "Search-only chess engine (alpha-beta, TT, QS, LMR) with optional logistic-coeff bridge"
+description = "Search-only chess engine with optional logistic-coefficient bridge"
 requires-python = ">=3.9"
+readme = "README.md"
 dependencies = [
   "chess>=1.11.2",
   "matplotlib>=3.7",
   "tomli; python_version<'3.11'"
 ]
+
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["chess_engine*"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

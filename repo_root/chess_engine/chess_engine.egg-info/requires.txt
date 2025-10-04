@@ -1,0 +1,5 @@
+chess>=1.11.2
+matplotlib>=3.7
+
+[:python_version < "3.11"]
+tomli

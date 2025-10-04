@@ -1,0 +1,19 @@
+{
+  "feature_set": "material5",
+  "feature_names": [
+    "pawn_diff",
+    "bishop_diff",
+    "rook_diff",
+    "knight_diff",
+    "queen_diff"
+  ],
+  "w": [
+    0.42490470563944477,
+    1.081313875923287,
+    1.4410774781426345,
+    0.9451541589300153,
+    2.7637498906591995
+  ],
+  "b": 0.10855950609571331,
+  "note": "logistic regression for win prob (trained with CPU(sklearn))"
+}
