@@ -1,0 +1,8 @@
+fen,depth,time_ms,bestmove,score,nodes,nps
+startpos,4,2000,g1h3,4,91,374
+startpos,5,2000,h2h3,4,300,149
+startpos,6,2000,h2h3,4,300,149
+startpos,7,2000,b1a3,4,261,130
+startpos,8,2000,h2h3,4,307,153
+startpos,9,2000,h2h3,4,276,137
+startpos,10,2000,f2f3,4,380,189

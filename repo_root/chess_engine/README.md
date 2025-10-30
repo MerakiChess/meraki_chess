@@ -18,8 +18,7 @@ python -m chess_engine.cli.play --fen startpos --depth 6 --time-ms 2000
 python -m chess_engine.cli.play --fen startpos --depth 6 --time-ms 2000 --coeff ..\chess_dataprocessing\models\logreg_coeffs.json --alpha 0.35
 
 # ベンチマーク
-python -m chess_engine.cli.bench --fen startpos --dmin 4 --dmax 10 --time-ms 2000 ^
-  --coeff ..\chess_dataprocessing\models\logreg_coeffs.json
+python -m chess_engine.cli.bench --fen startpos --dmin 4 --dmax 10 --time-ms 2000 --coeff ..\chess_dataprocessing\models\logreg_coeffs.json
 
 # UCIモード
 python -c "from chess_engine.io.uci import run_uci; run_uci()"
