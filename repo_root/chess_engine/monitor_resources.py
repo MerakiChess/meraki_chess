@@ -147,7 +147,7 @@ class MonitorGUI(wx.Frame):
     def _update_graph(self):
         if not self.rows:
             return
-        x = [r["t_sec"] for r in rows]
+        x = [r["t_sec"] for r in self.rows]
         
         # Process CPU
         y = [r["proc_cpu_percent"] for r in self.rows if r["proc_cpu_percent"] is not None]
