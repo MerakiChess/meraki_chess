@@ -1,0 +1,19 @@
+# 1) ディレクトリへ
+cd C:\Users\<you>\Documents\meraki_chess\repo_root\chess_dataprocessing
+
+# 2) venv 作成＆有効化
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 3) 依存インストール（CPU版）
+python -m pip install -U pip setuptools wheel
+python -m pip install pandas scikit-learn tqdm chess
+
+# 4) 動作チェック
+python -c "import pandas as pd, chess, sklearn; print('OK', pd.__version__)"
+
+# 5) 係数生成（サンプル）
+python interpret.py  --in .\data\games.csv          --out .\data\games_clean.csv
+python interpret2.py --in .\data\games_clean.csv    --out .\data\processed_positions.csv
+python interpret3.py --in .\data\processed_positions.csv --out .\data\processed_positions_cleaned.csv
+python learning.py   --in .\data\processed_positions_cleaned.csv --out .\models\logreg_coeffs.json
