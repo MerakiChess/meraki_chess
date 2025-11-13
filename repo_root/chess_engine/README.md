@@ -23,6 +23,22 @@ python -m chess_engine.cli.bench --fen startpos --dmin 4 --dmax 10 --time-ms 200
 # UCIモード
 python -c "from chess_engine.io.uci import run_uci; run_uci()"
 ` 別ウィンドウ/GUIから "position startpos" → "go" → "bestmove ..." を確認 `
+1. isready入力
+パターン1
+ucinewgame
+position startpos
+go movetime 2000
+パターン2
+position fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+go movetime 1500
+パターン3
+ucinewgame
+position startpos
+go wtime 300000 btime 300000 winc 2000 binc 2000
+止める
+stop
+quit
+
 `
 
 #仮想環境マニュアル
