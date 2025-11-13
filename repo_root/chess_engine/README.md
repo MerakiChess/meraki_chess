@@ -24,3 +24,5 @@ python -m chess_engine.cli.bench --fen startpos --dmin 4 --dmax 10 --time-ms 200
 python -c "from chess_engine.io.uci import run_uci; run_uci()"
 ` 別ウィンドウ/GUIから "position startpos" → "go" → "bestmove ..." を確認 `
 `
+
+#仮想環境マニュアル

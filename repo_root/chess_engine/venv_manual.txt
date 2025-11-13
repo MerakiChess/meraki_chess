@@ -1,0 +1,18 @@
+cd C:\Users\<you>\Documents\meraki_chess\repo_root\chess_engine
+
+# 1) venv（学習と分離したい場合）
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 2) 依存＋編集可能インストール
+python -m pip install -U pip setuptools wheel
+python -m pip install chess matplotlib psutil
+python -m pip install -e .
+
+# 3) 動作チェック（プレイ）
+python -m chess_engine.cli.play --fen startpos --depth 6 --time-ms 2000
+# 係数ブレンド（material5）
+python -m chess_engine.cli.play --fen startpos --depth 6 --time-ms 2000 --coeff ..\chess_dataprocessing\models\logreg_coeffs.json --alpha 0.35
+
+# 4) ベンチ & リソースモニタ付き（拡張bench.py導入済み想定）
+python -m chess_engine.cli.bench --fen startpos --dmin 4 --dmax 10 --time-ms 2000 --coeff ..\chess_dataprocessing\models\logreg_coeffs.json
