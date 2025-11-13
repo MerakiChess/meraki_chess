@@ -63,7 +63,6 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False, encoding="utf-8")
     print(f"[OK] cleaned -> {out}  rows={len(df)}  cols={list(df.columns)}")
-    print("ウバーレ、ポリエあと忘れた")
 
 if __name__=="__main__":
     main()
