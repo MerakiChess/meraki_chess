@@ -15,15 +15,16 @@ HIGHLIGHT_COLOR = wx.Colour(170, 210, 130)
 
 
 class ChessBoardPanel(wx.Panel):
-    def __init__(self, parent, board: chess.Board):
+    def __init__(self, parent, board: chess.Board, controller):
         super().__init__(parent)
         self.board = board
         self.selected_square = None
         self.legal_moves = []
-        self.parent = parent
+        self.controller = controller  # ← ここに MainFrame を保持する
 
         self.Bind(wx.EVT_PAINT, self.on_paint)
         self.Bind(wx.EVT_LEFT_DOWN, self.on_click)
+
 
     # ========== 描画 ==========
     def on_paint(self, event):
@@ -74,7 +75,7 @@ class ChessBoardPanel(wx.Panel):
             # 移動試行
             move = chess.Move(self.selected_square, sq)
             if move in self.board.legal_moves:
-                self.parent.push_move(move)
+                self.controller.push_move(move)
             self.selected_square = None
             self.legal_moves = []
 
@@ -99,7 +100,7 @@ class MainFrame(wx.Frame):
         vbox.Add(hbox, flag=wx.EXPAND | wx.ALL, border=5)
 
         # チェス盤
-        self.board_panel = ChessBoardPanel(panel, self.board)
+        self.board_panel = ChessBoardPanel(panel, self.board, controller=self)
         self.board_panel.SetMinSize((SQUARE_SIZE * 8, SQUARE_SIZE * 8))
         vbox.Add(self.board_panel, flag=wx.EXPAND | wx.ALL, border=5)
 
@@ -141,4 +142,19 @@ class MainFrame(wx.Frame):
             self.move_stack.pop()
             prev_fen = self.move_stack.pop()
         else:
-            prev_fen = self.move_
+            prev_fen = self.move_stack.pop()
+
+        self.board = chess.Board(prev_fen)
+        self.board_panel.board = self.board
+        self.board_panel.Refresh()
+
+
+# ==== 起動部分 ====
+def main():
+    app = wx.App(False)
+    MainFrame()
+    app.MainLoop()
+
+
+if __name__ == "__main__":
+    main()
