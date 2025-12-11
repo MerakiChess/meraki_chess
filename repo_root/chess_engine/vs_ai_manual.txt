@@ -1,0 +1,54 @@
+2. 実行方法
+
+プロジェクトルート repo_root\chess_engine で：
+
+初期局面から、人間が白で対戦
+(.venv) python -m chess_engine.cli.vs_ai --color white --depth 6 --time-ms 2000 --coeff ..\chess_dataprocessing\models\logreg_coeffs.json --alpha 0.35
+
+特定の FEN から始めたい場合
+(.venv) python -m chess_engine.cli.vs_ai ^
+  --fen "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 1" ^
+  --color white ^
+  --depth 6 ^
+  --time-ms 2000 ^
+  --coeff ..\chess_dataprocessing\models\logreg_coeffs.json ^
+  --alpha 0.35
+
+評価値も見たい場合
+(.venv) python -m chess_engine.cli.vs_ai --color white --show-eval
+
+3. 操作イメージ
+
+起動後、こんな感じで進みます：
+
+盤面と FEN が表示される
+
+あなたの番なら：
+
+あなたの手を入力してください (SAN または UCI, 'q'で終了):
+
+
+例：
+
+e4
+
+Nf3
+
+exd5
+
+O-O
+
+e2e4（UCI）
+
+間違えたら：
+
+⚠️ その手は合法手ではありません。もう一度。
+
+
+AI の番は自動で
+
+=== AI 考え中... ===
+AI の指し手: Nf6 (g8f6)
+
+
+終局したら結果を表示して終了。
