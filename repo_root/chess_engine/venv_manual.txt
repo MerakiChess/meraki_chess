@@ -2,7 +2,7 @@ cd C:\Users\<you>\Documents\meraki_chess\repo_root\chess_engine
 
 # 1) venv（学習と分離したい場合）
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\activate
 
 # 2) 依存＋編集可能インストール
 python -m pip install -U pip setuptools wheel
