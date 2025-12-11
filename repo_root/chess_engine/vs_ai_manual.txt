@@ -1,1 +1,1 @@
-(.venv) python -m chess_engine.cli.wxgui
+(.venv) python -m chess_engine.gui.wxgui
