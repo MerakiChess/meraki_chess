@@ -18,32 +18,26 @@ K_ATT: float = 0.10
 
 
 def attack_score(board: chess.Board) -> int:
-    """Return (white_attacks - black_attacks).
-
-    「攻撃しているマスの数」は、
-    - 白駒が攻撃している“黒駒が乗っているマス”の種類数
-    - 黒駒が攻撃している“白駒が乗っているマス”の種類数
-    の差で数えます。
-
-    1 マスを複数の駒が攻撃していても「1」とカウント。
-    その方が計算が軽く、一局面での過大評価も防げます。
-    """
     occupied_white = board.occupied_co[chess.WHITE]
     occupied_black = board.occupied_co[chess.BLACK]
 
-    # 白が攻撃している黒駒のマス
-    attacked_black_bb = 0
+    # SquareSet を最初に作る
+    attacked_black = chess.SquareSet()
+    attacked_white = chess.SquareSet()
+
+    # 白 → 黒
     for sq in chess.SquareSet(occupied_white):
-        attacked_black_bb |= board.attacks(sq) & occupied_black
+        attacked_black |= board.attacks(sq) & chess.SquareSet(occupied_black)
 
-    # 黒が攻撃している白駒のマス
-    attacked_white_bb = 0
+    # 黒 → 白
     for sq in chess.SquareSet(occupied_black):
-        attacked_white_bb |= board.attacks(sq) & occupied_white
+        attacked_white |= board.attacks(sq) & chess.SquareSet(occupied_white)
 
-    white_attack = chess.popcount(attacked_black_bb)
-    black_attack = chess.popcount(attacked_white_bb)
+    white_attack = len(attacked_black)
+    black_attack = len(attacked_white)
+
     return white_attack - black_attack
+
 
 
 def mobility_score(board: chess.Board) -> int:
