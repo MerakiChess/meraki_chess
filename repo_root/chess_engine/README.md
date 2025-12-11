@@ -4,6 +4,12 @@
 - 係数ファイル `models/logreg_coeffs.json` があれば **material5** 特徴で勝率→cp に変換し、手作り評価とブレンド。
 - 無ければ手作り評価のみ。
 
+#仮想環境
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install chess matplotlib
+python -m pip install -e .
+
 # インストール
 cd C:\Users\kurisuke\Documents\meraki_chess\repo_root\chess_engine
 python -m pip install -U pip
