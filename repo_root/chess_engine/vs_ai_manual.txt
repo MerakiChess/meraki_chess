@@ -1,1 +1,0 @@
-(.venv) python -m chess_engine.gui.wxgui
