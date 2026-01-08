@@ -1,12 +1,35 @@
 import chess.pgn
 import wx
 import wx.lib.scrolledpanel as scrolled
+import wx.lib.agw.aui as aui
 import chess
 import chess.engine
+import psutil
+import time
+from datetime import datetime
+import os
+import csv
+from typing import Optional, List, Dict, Any
+import threading
 
 from ..engine.searcher import find_best_move
 from ..eval.ml_bridge import evaluate_board_with_ml
 from ..eval.heuristic import evaluate_board as eval_hc
+from ..cli.vs_stockfish import EngineMatch
+
+# GPUサポート（オプション）
+try:
+    import pynvml
+    _HAVE_NVML = True
+except Exception:
+    _HAVE_NVML = False
+
+try:
+    from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
+    from matplotlib.figure import Figure
+    _HAVE_MATPLOTLIB = True
+except Exception:
+    _HAVE_MATPLOTLIB = False
 
 
 SQUARE_SIZE = 64
@@ -139,12 +162,51 @@ class ChessBoardPanel(wx.Panel):
 
 class MainFrame(wx.Frame):
     def __init__(self):
-        super().__init__(None, title="Meraki Chess GUI (wxPython)", size=(600, 600))
+        super().__init__(None, title="Meraki Chess GUI (wxPython)", size=(1200, 800))
         self.board = chess.Board()
         self.move_stack = []     # FEN の履歴（待った用）
         self.uci_history = []    # UCI の履歴（PGN保存用）
+        
+        # モニタリング関連
+        self.monitor_proc = None
+        self.monitor_have_nvml = _init_nvml()
+        self.monitor_monitoring = False
+        self.monitor_rows: List[Dict[str, Any]] = []
+        self.monitor_t0 = 0
+        self.monitor_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_monitor_timer, self.monitor_timer)
+        
+        # 対戦関連
+        self.match = None
+        self.match_thread = None
+        self.match_running = False
 
-        panel = wx.Panel(self)
+        # メインパネルとノートブック
+        notebook = wx.Notebook(self)
+        
+        # タブ1: チェス対戦
+        self.game_panel = wx.Panel(notebook)
+        self._build_game_ui(self.game_panel)
+        notebook.AddPage(self.game_panel, "チェス対戦")
+        
+        # タブ2: リソース監視
+        self.monitor_panel = wx.Panel(notebook)
+        self._build_monitor_ui(self.monitor_panel)
+        notebook.AddPage(self.monitor_panel, "リソース監視")
+        
+        # タブ3: Stockfish対戦
+        self.match_panel = wx.Panel(notebook)
+        self._build_match_ui(self.match_panel)
+        notebook.AddPage(self.match_panel, "Stockfish対戦")
+        
+        # タブ4: 統計情報
+        self.stats_panel = wx.Panel(notebook)
+        self._build_stats_ui(self.stats_panel)
+        notebook.AddPage(self.stats_panel, "統計情報")
+        
+        self.Show()
+
+    def _build_game_ui(self, panel):
         vbox = wx.BoxSizer(wx.VERTICAL)
 
         # ボタン類
@@ -157,6 +219,10 @@ class MainFrame(wx.Frame):
         save_btn = wx.Button(panel, label="💾 Save PGN")
         save_btn.Bind(wx.EVT_BUTTON, self.on_save_pgn)
         hbox.Add(save_btn, flag=wx.LEFT, border=5)
+        
+        new_game_btn = wx.Button(panel, label="🆕 New Game")
+        new_game_btn.Bind(wx.EVT_BUTTON, self.on_new_game)
+        hbox.Add(new_game_btn, flag=wx.LEFT, border=5)
 
         vbox.Add(hbox, flag=wx.EXPAND | wx.ALL, border=5)
 
@@ -164,9 +230,594 @@ class MainFrame(wx.Frame):
         self.board_panel = ChessBoardPanel(panel, self.board, controller=self)
         self.board_panel.SetMinSize((SQUARE_SIZE * 8, SQUARE_SIZE * 8))
         vbox.Add(self.board_panel, flag=wx.EXPAND | wx.ALL, border=5)
+        
+        # 局面情報
+        self.game_info_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 80))
+        vbox.Add(wx.StaticText(panel, label="局面情報:"), 0, wx.ALL, 5)
+        vbox.Add(self.game_info_ctrl, 0, wx.EXPAND | wx.ALL, border=5)
 
         panel.SetSizer(vbox)
-        self.Show()
+
+    def _build_monitor_ui(self, panel):
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # モード選択
+        mode_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        mode_sizer.Add(wx.StaticText(panel, label="監視モード:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.monitor_mode_choice = wx.Choice(panel, choices=["時間ベース", "深さベース"])
+        self.monitor_mode_choice.SetSelection(1)  # デフォルトは深さベース
+        self.monitor_mode_choice.Bind(wx.EVT_CHOICE, self._on_monitor_mode_changed)
+        mode_sizer.Add(self.monitor_mode_choice, 0, wx.ALL, 5)
+        main_sizer.Add(mode_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # 時間ベース設定パネル
+        self.monitor_time_panel = wx.Panel(panel)
+        time_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        time_sizer.Add(wx.StaticText(self.monitor_time_panel, label="監視間隔 (ms):"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.monitor_interval_ctrl = wx.TextCtrl(self.monitor_time_panel, value="200", size=(100, -1))
+        time_sizer.Add(self.monitor_interval_ctrl, 0, wx.ALL, 5)
+        time_sizer.Add(wx.StaticText(self.monitor_time_panel, label="監視時間 (s):"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.monitor_duration_ctrl = wx.TextCtrl(self.monitor_time_panel, value="60.0", size=(100, -1))
+        time_sizer.Add(self.monitor_duration_ctrl, 0, wx.ALL, 5)
+        self.monitor_time_panel.SetSizer(time_sizer)
+        main_sizer.Add(self.monitor_time_panel, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # 深さベース設定パネル
+        self.monitor_depth_panel = wx.Panel(panel)
+        depth_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        depth_sizer.Add(wx.StaticText(self.monitor_depth_panel, label="最小深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.monitor_min_depth_ctrl = wx.SpinCtrl(self.monitor_depth_panel, value="1", min=1, max=20)
+        depth_sizer.Add(self.monitor_min_depth_ctrl, 0, wx.ALL, 5)
+        depth_sizer.Add(wx.StaticText(self.monitor_depth_panel, label="最大深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.monitor_max_depth_ctrl = wx.SpinCtrl(self.monitor_depth_panel, value="12", min=1, max=20)
+        depth_sizer.Add(self.monitor_max_depth_ctrl, 0, wx.ALL, 5)
+        depth_sizer.Add(wx.StaticText(self.monitor_depth_panel, label="試行回数:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.monitor_trials_ctrl = wx.SpinCtrl(self.monitor_depth_panel, value="3", min=1, max=10)
+        depth_sizer.Add(self.monitor_trials_ctrl, 0, wx.ALL, 5)
+        self.monitor_depth_panel.SetSizer(depth_sizer)
+        main_sizer.Add(self.monitor_depth_panel, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # Buttons
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.monitor_start_btn = wx.Button(panel, label="開始")
+        self.monitor_start_btn.Bind(wx.EVT_BUTTON, self._on_monitor_start)
+        btn_sizer.Add(self.monitor_start_btn, 0, wx.ALL, 5)
+        self.monitor_stop_btn = wx.Button(panel, label="停止")
+        self.monitor_stop_btn.Bind(wx.EVT_BUTTON, self._on_monitor_stop)
+        self.monitor_stop_btn.Enable(False)
+        btn_sizer.Add(self.monitor_stop_btn, 0, wx.ALL, 5)
+        self.monitor_save_btn = wx.Button(panel, label="保存 (CSV & PNG)")
+        self.monitor_save_btn.Bind(wx.EVT_BUTTON, self._on_monitor_save)
+        btn_sizer.Add(self.monitor_save_btn, 0, wx.ALL, 5)
+        main_sizer.Add(btn_sizer, 0, wx.ALL, 5)
+        
+        # Log
+        main_sizer.Add(wx.StaticText(panel, label="ログ:"), 0, wx.ALL, 5)
+        self.monitor_log_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 80))
+        main_sizer.Add(self.monitor_log_ctrl, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # Graph
+        if _HAVE_MATPLOTLIB:
+            main_sizer.Add(wx.StaticText(panel, label="グラフ:"), 0, wx.ALL, 5)
+            self.monitor_graph_panel = wx.Panel(panel, size=(-1, 300))
+            main_sizer.Add(self.monitor_graph_panel, 1, wx.EXPAND | wx.ALL, 5)
+            self._init_monitor_figure()
+        else:
+            main_sizer.Add(wx.StaticText(panel, label="(Matplotlibが利用できません)"), 0, wx.ALL, 5)
+        
+        panel.SetSizer(main_sizer)
+    
+        panel.SetSizer(main_sizer)
+    
+    def _build_match_ui(self, panel):
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        # 設定パネル
+        config_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        config_sizer.Add(wx.StaticText(panel, label="ゲーム数:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.match_games_ctrl = wx.SpinCtrl(panel, value="5", min=1, max=100)
+        config_sizer.Add(self.match_games_ctrl, 0, wx.ALL, 5)
+        
+        config_sizer.Add(wx.StaticText(panel, label="Meraki深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.match_meraki_depth_ctrl = wx.SpinCtrl(panel, value="5", min=1, max=20)
+        config_sizer.Add(self.match_meraki_depth_ctrl, 0, wx.ALL, 5)
+        
+        config_sizer.Add(wx.StaticText(panel, label="Stockfish深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.match_sf_depth_ctrl = wx.SpinCtrl(panel, value="15", min=1, max=25)
+        config_sizer.Add(self.match_sf_depth_ctrl, 0, wx.ALL, 5)
+        
+        main_sizer.Add(config_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # Stockfishパス設定
+        path_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        path_sizer.Add(wx.StaticText(panel, label="Stockfishパス:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.match_sf_path_ctrl = wx.TextCtrl(panel, value="stockfish", size=(200, -1))
+        path_sizer.Add(self.match_sf_path_ctrl, 1, wx.ALL, 5)
+        main_sizer.Add(path_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # ボタン
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.match_start_btn = wx.Button(panel, label="対戦開始")
+        self.match_start_btn.Bind(wx.EVT_BUTTON, self._on_match_start)
+        btn_sizer.Add(self.match_start_btn, 0, wx.ALL, 5)
+        
+        self.match_stop_btn = wx.Button(panel, label="中止")
+        self.match_stop_btn.Bind(wx.EVT_BUTTON, self._on_match_stop)
+        self.match_stop_btn.Enable(False)
+        btn_sizer.Add(self.match_stop_btn, 0, wx.ALL, 5)
+        
+        main_sizer.Add(btn_sizer, 0, wx.ALL, 5)
+        
+        # ログ/結果
+        main_sizer.Add(wx.StaticText(panel, label="対戦ログ:"), 0, wx.ALL, 5)
+        self.match_log_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 150))
+        main_sizer.Add(self.match_log_ctrl, 1, wx.EXPAND | wx.ALL, 5)
+        
+        main_sizer.Add(wx.StaticText(panel, label="統計結果:"), 0, wx.ALL, 5)
+        self.match_result_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 150))
+        main_sizer.Add(self.match_result_ctrl, 0, wx.EXPAND | wx.ALL, 5)
+        
+        panel.SetSizer(main_sizer)
+    
+    def _build_stats_ui(self, panel):
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        main_sizer.Add(wx.StaticText(panel, label="対戦統計情報:"), 0, wx.ALL, 5)
+        self.stats_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 200))
+        main_sizer.Add(self.stats_ctrl, 0, wx.EXPAND | wx.ALL, 5)
+        
+        main_sizer.Add(wx.StaticText(panel, label="直近対戦結果:"), 0, wx.ALL, 5)
+        self.recent_games_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 200))
+        main_sizer.Add(self.recent_games_ctrl, 1, wx.EXPAND | wx.ALL, 5)
+        
+        panel.SetSizer(main_sizer)
+    
+    def _init_monitor_figure(self):
+        self.monitor_figure = Figure()
+        self.monitor_ax1 = self.monitor_figure.add_subplot(221)  # Process CPU
+        self.monitor_ax2 = self.monitor_figure.add_subplot(222)  # System CPU
+        self.monitor_ax3 = self.monitor_figure.add_subplot(223)  # Memory
+        self.monitor_ax4 = self.monitor_figure.add_subplot(224)  # GPU (if available)
+        self.monitor_canvas = FigureCanvas(self.monitor_graph_panel, -1, self.monitor_figure)
+    
+    def _on_monitor_mode_changed(self, event):
+        """監視モード変更時の処理"""
+        is_depth_mode = self.monitor_mode_choice.GetSelection() == 1
+        self.monitor_time_panel.Show(not is_depth_mode)
+        self.monitor_depth_panel.Show(is_depth_mode)
+        self.monitor_time_panel.GetParent().Layout()
+    
+    def _on_monitor_start(self, event):
+        """監視開始"""
+        is_depth_mode = self.monitor_mode_choice.GetSelection() == 1
+        
+        if is_depth_mode:
+            self._on_monitor_start_depth()
+        else:
+            self._on_monitor_start_time()
+    
+    def _on_monitor_start_time(self):
+        """時間ベース監視開始"""
+        try:
+            interval_ms = int(self.monitor_interval_ctrl.GetValue())
+            duration_s = float(self.monitor_duration_ctrl.GetValue())
+        except ValueError:
+            wx.MessageBox("入力値が無効です。", "エラー", wx.ICON_ERROR)
+            return
+        
+        self.monitor_proc = _init_process(None)
+        psutil.cpu_percent(None)  # System CPU init
+        self.monitor_rows = []
+        self.monitor_t0 = time.perf_counter()
+        self.monitor_monitoring = True
+        self.monitor_start_btn.Enable(False)
+        self.monitor_stop_btn.Enable(True)
+        self.monitor_timer.Start(interval_ms)
+        self.monitor_log_ctrl.AppendText(f"時間ベース監視開始: 間隔={interval_ms}ms, 時間={duration_s}s\n")
+
+    def _on_monitor_start_depth(self):
+        """深さベース監視開始"""
+        try:
+            min_depth = self.monitor_min_depth_ctrl.GetValue()
+            max_depth = self.monitor_max_depth_ctrl.GetValue()
+            trials = self.monitor_trials_ctrl.GetValue()
+        except ValueError:
+            wx.MessageBox("入力値が無効です。", "エラー", wx.ICON_ERROR)
+            return
+        
+        if min_depth > max_depth:
+            wx.MessageBox("最小深さ > 最大深さです。", "エラー", wx.ICON_ERROR)
+            return
+        
+        self.monitor_start_btn.Enable(False)
+        self.monitor_stop_btn.Enable(True)
+        self.monitor_log_ctrl.AppendText(f"深さベース監視開始: 深さ={min_depth}-{max_depth}, 試行={trials}\n")
+        
+        # スレッドで実行
+        self.monitor_thread = threading.Thread(
+            target=self._run_depth_monitoring,
+            args=(min_depth, max_depth, trials),
+            daemon=True
+        )
+        self.monitor_thread.start()
+    
+    def _run_depth_monitoring(self, min_depth, max_depth, trials):
+        """深さベースのリソース監視を実行"""
+        try:
+            self.monitor_rows = []
+            
+            for depth in range(min_depth, max_depth + 1):
+                for trial in range(trials):
+                    if not self.monitor_monitoring:
+                        break
+                    
+                    wx.CallAfter(
+                        self.monitor_log_ctrl.AppendText,
+                        f"深さ {depth}, 試行 {trial+1}/{trials} ... "
+                    )
+                    
+                    # リソース監視開始
+                    proc = _init_process(None)
+                    psutil.cpu_percent(None)
+                    
+                    t_start = time.perf_counter()
+                    rss_start = proc.memory_info().rss / (1024 * 1024)
+                    cpu_start = proc.cpu_percent(None)
+                    
+                    # 初期局面で探索実行
+                    board = chess.Board()
+                    try:
+                        uci = find_best_move(
+                            board,
+                            depth=depth,
+                            time_ms=5000,  # 最大5秒
+                            coeff_path=None,
+                            ml_alpha=0.0,
+                        )
+                    except Exception as e:
+                        wx.CallAfter(self.monitor_log_ctrl.AppendText, f"エラー: {e}\n")
+                        continue
+                    
+                    elapsed = time.perf_counter() - t_start
+                    rss_end = proc.memory_info().rss / (1024 * 1024)
+                    cpu_end = proc.cpu_percent(None)
+                    
+                    self.monitor_rows.append({
+                        "depth": depth,
+                        "trial": trial + 1,
+                        "elapsed_sec": round(elapsed, 3),
+                        "rss_mb": round(rss_end, 2),
+                        "rss_delta_mb": round(rss_end - rss_start, 2),
+                        "cpu_percent": round(cpu_end, 2),
+                    })
+                    
+                    wx.CallAfter(
+                        self.monitor_log_ctrl.AppendText,
+                        f"完了 (時間: {elapsed:.2f}s, メモリ: {rss_end:.1f}MB, CPU: {cpu_end:.1f}%)\n"
+                    )
+                
+                if not self.monitor_monitoring:
+                    break
+            
+            wx.CallAfter(self._update_depth_graph)
+        except Exception as e:
+            wx.CallAfter(self.monitor_log_ctrl.AppendText, f"エラー: {str(e)}\n")
+        finally:
+            self.monitor_monitoring = False
+            wx.CallAfter(self.monitor_start_btn.Enable, True)
+            wx.CallAfter(self.monitor_stop_btn.Enable, False)
+
+    def _on_monitor_stop(self, event):
+        self.monitor_monitoring = False
+        self.monitor_timer.Stop()
+        self.monitor_start_btn.Enable(True)
+        self.monitor_stop_btn.Enable(False)
+        self.monitor_log_ctrl.AppendText("監視停止\n")
+        if _HAVE_MATPLOTLIB:
+            is_depth_mode = self.monitor_mode_choice.GetSelection() == 1
+            if is_depth_mode:
+                self._update_depth_graph()
+            else:
+                self._update_monitor_graph()
+
+    def _on_monitor_timer(self, event):
+        now = time.perf_counter()
+        t = now - self.monitor_t0
+        duration_s = float(self.monitor_duration_ctrl.GetValue())
+        if t > duration_s:
+            self._on_monitor_stop(None)
+            return
+        
+        # Collect data
+        sys_cpu = psutil.cpu_percent(None)
+        sys_mem = psutil.virtual_memory().percent
+        
+        proc_cpu = None
+        proc_rss_mb = None
+        if self.monitor_proc:
+            try:
+                proc_cpu = self.monitor_proc.cpu_percent(None)
+                proc_rss_mb = self.monitor_proc.memory_info().rss / (1024 * 1024)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                self.monitor_proc = None
+        
+        gpu = _read_gpu() if self.monitor_have_nvml else {"gpu_util_avg": None, "gpu_mem_used_mib": None}
+        
+        self.monitor_rows.append({
+            "t_sec": round(t, 3),
+            "proc_cpu_percent": None if proc_cpu is None else round(proc_cpu, 2),
+            "proc_rss_mb": None if proc_rss_mb is None else round(proc_rss_mb, 3),
+            "sys_cpu_percent": round(sys_cpu, 2),
+            "sys_mem_percent": round(sys_mem, 2),
+            "gpu_util_avg": None if gpu["gpu_util_avg"] is None else round(gpu["gpu_util_avg"], 2),
+            "gpu_mem_used_mib": None if gpu["gpu_mem_used_mib"] is None else round(gpu["gpu_mem_used_mib"], 2),
+        })
+        
+        if _HAVE_MATPLOTLIB:
+            self._update_monitor_graph()
+
+    def _update_monitor_graph(self):
+        if not self.monitor_rows or not _HAVE_MATPLOTLIB:
+            return
+        x = [r["t_sec"] for r in self.monitor_rows]
+        
+        # Process CPU
+        y = [r["proc_cpu_percent"] for r in self.monitor_rows if r["proc_cpu_percent"] is not None]
+        x_p = [r["t_sec"] for r in self.monitor_rows if r["proc_cpu_percent"] is not None]
+        self.monitor_ax1.clear()
+        if y:
+            self.monitor_ax1.plot(x_p, y)
+            self.monitor_ax1.set_title("Process CPU%")
+        
+        # System CPU
+        self.monitor_ax2.clear()
+        self.monitor_ax2.plot(x, [r["sys_cpu_percent"] for r in self.monitor_rows])
+        self.monitor_ax2.set_title("System CPU%")
+        
+        # Memory
+        self.monitor_ax3.clear()
+        self.monitor_ax3.plot(x, [r["sys_mem_percent"] for r in self.monitor_rows], label="Sys Mem%")
+        y_mem = [r["proc_rss_mb"] for r in self.monitor_rows if r["proc_rss_mb"] is not None]
+        x_mem = [r["t_sec"] for r in self.monitor_rows if r["proc_rss_mb"] is not None]
+        if y_mem:
+            self.monitor_ax3.plot(x_mem, y_mem, label="Proc RSS (MiB)")
+        self.monitor_ax3.legend()
+        self.monitor_ax3.set_title("メモリ")
+        
+        # GPU
+        self.monitor_ax4.clear()
+        if self.monitor_have_nvml:
+            y_gpu = [r["gpu_util_avg"] for r in self.monitor_rows if r["gpu_util_avg"] is not None]
+            x_gpu = [r["t_sec"] for r in self.monitor_rows if r["gpu_util_avg"] is not None]
+            if y_gpu:
+                self.monitor_ax4.plot(x_gpu, y_gpu, label="GPU Util%")
+            y_mem_gpu = [r["gpu_mem_used_mib"] for r in self.monitor_rows if r["gpu_mem_used_mib"] is not None]
+            x_mem_gpu = [r["t_sec"] for r in self.monitor_rows if r["gpu_mem_used_mib"] is not None]
+            if y_mem_gpu:
+                self.monitor_ax4.plot(x_mem_gpu, y_mem_gpu, label="GPU Mem (MiB)")
+            self.monitor_ax4.legend()
+            self.monitor_ax4.set_title("GPU")
+        else:
+            self.monitor_ax4.text(0.5, 0.5, "GPU利用不可", ha="center", va="center", transform=self.monitor_ax4.transAxes)
+        
+        self.monitor_canvas.draw()
+
+    def _update_depth_graph(self):
+        """深さベースのグラフを更新"""
+        if not self.monitor_rows or not _HAVE_MATPLOTLIB:
+            return
+        
+        # 深さごとに試行結果を集計
+        depth_stats = {}
+        for row in self.monitor_rows:
+            d = row["depth"]
+            if d not in depth_stats:
+                depth_stats[d] = {
+                    "elapsed": [],
+                    "rss_delta": [],
+                    "cpu": [],
+                }
+            depth_stats[d]["elapsed"].append(row["elapsed_sec"])
+            depth_stats[d]["rss_delta"].append(row["rss_delta_mb"])
+            depth_stats[d]["cpu"].append(row["cpu_percent"])
+        
+        depths = sorted(depth_stats.keys())
+        
+        # グラフ更新
+        # グラフ1: 実行時間
+        self.monitor_ax1.clear()
+        elapsed_avg = [sum(depth_stats[d]["elapsed"]) / len(depth_stats[d]["elapsed"]) for d in depths]
+        elapsed_min = [min(depth_stats[d]["elapsed"]) for d in depths]
+        elapsed_max = [max(depth_stats[d]["elapsed"]) for d in depths]
+        self.monitor_ax1.plot(depths, elapsed_avg, marker='o', label="平均")
+        self.monitor_ax1.fill_between(depths, elapsed_min, elapsed_max, alpha=0.3, label="範囲")
+        self.monitor_ax1.set_xlabel("探索深さ")
+        self.monitor_ax1.set_ylabel("実行時間 (秒)")
+        self.monitor_ax1.set_title("実行時間 vs 探索深さ")
+        self.monitor_ax1.legend()
+        self.monitor_ax1.grid(True, alpha=0.3)
+        
+        # グラフ2: メモリ変化
+        self.monitor_ax2.clear()
+        rss_avg = [sum(depth_stats[d]["rss_delta"]) / len(depth_stats[d]["rss_delta"]) for d in depths]
+        rss_min = [min(depth_stats[d]["rss_delta"]) for d in depths]
+        rss_max = [max(depth_stats[d]["rss_delta"]) for d in depths]
+        self.monitor_ax2.plot(depths, rss_avg, marker='s', color='green', label="平均")
+        self.monitor_ax2.fill_between(depths, rss_min, rss_max, alpha=0.3, color='green', label="範囲")
+        self.monitor_ax2.set_xlabel("探索深さ")
+        self.monitor_ax2.set_ylabel("メモリ変化 (MB)")
+        self.monitor_ax2.set_title("メモリ変化 vs 探索深さ")
+        self.monitor_ax2.legend()
+        self.monitor_ax2.grid(True, alpha=0.3)
+        
+        # グラフ3: CPU使用率
+        self.monitor_ax3.clear()
+        cpu_avg = [sum(depth_stats[d]["cpu"]) / len(depth_stats[d]["cpu"]) for d in depths]
+        cpu_min = [min(depth_stats[d]["cpu"]) for d in depths]
+        cpu_max = [max(depth_stats[d]["cpu"]) for d in depths]
+        self.monitor_ax3.plot(depths, cpu_avg, marker='^', color='red', label="平均")
+        self.monitor_ax3.fill_between(depths, cpu_min, cpu_max, alpha=0.3, color='red', label="範囲")
+        self.monitor_ax3.set_xlabel("探索深さ")
+        self.monitor_ax3.set_ylabel("CPU使用率 (%)")
+        self.monitor_ax3.set_title("CPU使用率 vs 探索深さ")
+        self.monitor_ax3.legend()
+        self.monitor_ax3.grid(True, alpha=0.3)
+        
+        # グラフ4: 全体サマリー
+        self.monitor_ax4.clear()
+        self.monitor_ax4.axis('off')
+        summary_text = "深さベース分析サマリー\n"
+        summary_text += f"最小深さ: {depths[0]}\n"
+        summary_text += f"最大深さ: {depths[-1]}\n"
+        summary_text += f"総試行回数: {len(self.monitor_rows)}\n"
+        summary_text += f"最大実行時間: {max(elapsed_avg):.2f}秒\n"
+        summary_text += f"最大メモリ変化: {max(rss_avg):.2f}MB\n"
+        self.monitor_ax4.text(0.1, 0.9, summary_text, transform=self.monitor_ax4.transAxes,
+                             fontsize=11, verticalalignment='top', family='monospace')
+        
+        self.monitor_canvas.draw()
+
+    def _on_monitor_save(self, event):
+        if not self.monitor_rows:
+            wx.MessageBox("保存するデータがありません。", "エラー", wx.ICON_ERROR)
+            return
+        
+        outdir = "monitor_out"
+        os.makedirs(outdir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        is_depth_mode = self.monitor_mode_choice.GetSelection() == 1
+        
+        if is_depth_mode:
+            csv_path = os.path.join(outdir, f"depth_analysis_{stamp}.csv")
+            fieldnames = ["depth", "trial", "elapsed_sec", "rss_mb", "rss_delta_mb", "cpu_percent"]
+        else:
+            csv_path = os.path.join(outdir, f"monitor_{stamp}.csv")
+            fieldnames = [
+                "t_sec", "proc_cpu_percent", "proc_rss_mb", "sys_cpu_percent", "sys_mem_percent",
+                "gpu_util_avg", "gpu_mem_used_mib"
+            ]
+        
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(self.monitor_rows)
+        
+        self.monitor_log_ctrl.AppendText(f"CSV保存: {csv_path}\n")
+        
+        if _HAVE_MATPLOTLIB:
+            png_path = os.path.join(outdir, f"graphs_{stamp}.png")
+            self.monitor_figure.savefig(png_path, dpi=100, bbox_inches='tight')
+            self.monitor_log_ctrl.AppendText(f"PNG保存: {png_path}\n")
+
+    def on_new_game(self, event):
+        dlg = wx.MessageDialog(
+            self,
+            "新しいゲームを開始しますか？",
+            "確認",
+            wx.YES_NO | wx.ICON_QUESTION
+        )
+        if dlg.ShowModal() == wx.ID_YES:
+            self.board = chess.Board()
+            self.move_stack = []
+            self.uci_history = []
+            self.board_panel.board = self.board
+            self.board_panel.Refresh()
+            self._update_game_info()
+        dlg.Destroy()
+    
+    def _on_match_start(self, event):
+        """対戦開始"""
+        if self.match_running:
+            wx.MessageBox("既に対戦が実行中です。", "エラー", wx.ICON_ERROR)
+            return
+        
+        num_games = self.match_games_ctrl.GetValue()
+        meraki_depth = self.match_meraki_depth_ctrl.GetValue()
+        stockfish_depth = self.match_sf_depth_ctrl.GetValue()
+        stockfish_path = self.match_sf_path_ctrl.GetValue()
+        
+        self.match_running = True
+        self.match_start_btn.Enable(False)
+        self.match_stop_btn.Enable(True)
+        self.match_log_ctrl.AppendText(f"\n=== 対戦開始 ===\n")
+        self.match_log_ctrl.AppendText(f"ゲーム数: {num_games}, Meraki深さ: {meraki_depth}, Stockfish深さ: {stockfish_depth}\n\n")
+        
+        # スレッドで対戦実行
+        self.match_thread = threading.Thread(
+            target=self._run_match_thread,
+            args=(num_games, meraki_depth, stockfish_depth, stockfish_path),
+            daemon=True
+        )
+        self.match_thread.start()
+    
+    def _run_match_thread(self, num_games, meraki_depth, stockfish_depth, stockfish_path):
+        """対戦実行スレッド"""
+        try:
+            self.match = EngineMatch(
+                engine_path=stockfish_path,
+                meraki_depth=meraki_depth,
+                meraki_time_ms=1500,
+                stockfish_depth=stockfish_depth,
+                stockfish_time_ms=1000,
+            )
+            
+            results = self.match.play_matches(num_matches=num_games)
+            stats = self.match.calculate_stats(results)
+            
+            # GUI更新
+            wx.CallAfter(self._update_match_results, results, stats)
+            
+        except Exception as e:
+            wx.CallAfter(self.match_log_ctrl.AppendText, f"エラー: {str(e)}\n")
+        finally:
+            self.match_running = False
+            wx.CallAfter(self.match_start_btn.Enable, True)
+            wx.CallAfter(self.match_stop_btn.Enable, False)
+            if self.match:
+                self.match.close()
+    
+    def _update_match_results(self, results, stats):
+        """対戦結果を画面に表示"""
+        self.match_log_ctrl.AppendText(f"\n=== 対戦完了 ===\n")
+        self.match_log_ctrl.AppendText(f"総ゲーム数: {results['total_games']}\n")
+        
+        for game in results['games']:
+            meraki_color = "白" if game['meraki_white'] else "黒"
+            self.match_log_ctrl.AppendText(
+                f"ゲーム {game['game_num']}: 結果={game['result']}, "
+                f"Meraki={meraki_color}, 手数={game['moves']}, "
+                f"時間={game['time_sec']:.1f}秒\n"
+            )
+        
+        result_text = f"""
+=== 統計情報 ===
+総ゲーム数: {results['total_games']}
+Meraki勝利: {results['meraki_wins']}
+Stockfish勝利: {results['stockfish_wins']}
+引き分け: {results['draws']}
+
+=== 詳細統計 ===
+勝率: {stats['meraki_win_rate']:.1f}%
+スコア: {stats['meraki_score']:.1f}/{results['total_games']}
+平均ゲーム長: {stats['avg_game_length']:.1f} 手
+平均ゲーム時間: {stats['avg_game_time_sec']:.2f} 秒
+推定ELO差: {stats['estimated_elo_diff']}
+"""
+        self.match_result_ctrl.SetValue(result_text)
+        
+        # 統計タブも更新
+        self.stats_ctrl.AppendText(result_text)
+        
+        # 結果をファイル保存
+        self.match.save_results(results)
+    
+    def _on_match_stop(self, event):
+        """対戦中止"""
+        if self.match_running:
+            self.match_log_ctrl.AppendText("\n対戦を中止します...\n")
+            self.match_running = False
 
     # ========== 人間の手を処理 ==========
     def push_move(self, move: chess.Move):
@@ -178,10 +829,20 @@ class MainFrame(wx.Frame):
         self.uci_history.append(move.uci())
 
         self.board_panel.Refresh()
+        self._update_game_info()
 
         # 終局していなければ AI の手番へ
         if not self.board.is_game_over():
             wx.CallLater(50, self.ai_move)
+
+    def _update_game_info(self):
+        info = f"FEN: {self.board.fen()}\n"
+        info += f"手数: {len(self.uci_history)}\n"
+        if self.board.is_check():
+            info += "状態: チェック\n"
+        if self.board.is_game_over():
+            info += f"終局: {self.board.result()}\n"
+        self.game_info_ctrl.SetValue(info)
 
 
     # ========== AI の手 ==========
@@ -219,6 +880,7 @@ class MainFrame(wx.Frame):
         self.board = chess.Board(prev_fen)
         self.board_panel.board = self.board
         self.board_panel.Refresh()
+        self._update_game_info()
 
 
     def on_save_pgn(self, event):
@@ -241,8 +903,9 @@ class MainFrame(wx.Frame):
         game = chess.pgn.Game()
         game.headers["Event"] = "Meraki Chess GUI"
         game.headers["Site"] = "Local"
+        game.headers["Date"] = datetime.now().strftime("%Y.%m.%d")
         game.headers["White"] = "Human"
-        game.headers["Black"] = "Engine"
+        game.headers["Black"] = "Meraki Engine"
         if self.board.is_game_over():
             game.headers["Result"] = self.board.result()
         else:
@@ -262,6 +925,50 @@ class MainFrame(wx.Frame):
 
         wx.MessageBox(f"PGN を保存しました:\n{path}", "完了", wx.OK | wx.ICON_INFORMATION)
 
+
+
+# ==== ヘルパー関数 ====
+def _init_process(pid: Optional[int]) -> Optional[psutil.Process]:
+    if pid is None:
+        p = psutil.Process()
+    else:
+        p = psutil.Process(pid)
+    try:
+        p.cpu_percent(None)
+    except Exception:
+        pass
+    return p
+
+def _init_nvml() -> bool:
+    if not _HAVE_NVML:
+        return False
+    try:
+        pynvml.nvmlInit()
+        return True
+    except Exception:
+        return False
+
+def _read_gpu() -> Dict[str, Any]:
+    out = {"gpu_util_avg": None, "gpu_mem_used_mib": None}
+    if not _HAVE_NVML:
+        return out
+    try:
+        count = pynvml.nvmlDeviceGetCount()
+        if count == 0:
+            return out
+        utils = []
+        mems = []
+        for i in range(count):
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            util = pynvml.nvmlDeviceGetUtilizationRates(h).gpu
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h).used / (1024 * 1024)
+            utils.append(util)
+            mems.append(mem)
+        out["gpu_util_avg"] = sum(utils) / len(utils)
+        out["gpu_mem_used_mib"] = sum(mems)
+    except Exception:
+        pass
+    return out
 
 
 # ==== 起動部分 ====
