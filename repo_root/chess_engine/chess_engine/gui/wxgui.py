@@ -33,9 +33,10 @@ except Exception:
 
 
 SQUARE_SIZE = 64
-LIGHT_COLOR = wx.Colour(255,0,255)
-DARK_COLOR = wx.Colour(255, 0, 0)
-HIGHLIGHT_COLOR = wx.Colour(0, 255, 255)
+LIGHT_COLOR = wx.Colour(240, 217, 181)
+DARK_COLOR  = wx.Colour(181, 136,  99)
+HIGHLIGHT_COLOR = wx.Colour(255, 215,   0)  # 金っぽい黄色
+
 
 
 class ChessBoardPanel(wx.Panel):
