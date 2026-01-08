@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 import chess.pgn
 import wx
 import wx.lib.scrolledpanel as scrolled
@@ -12,10 +16,10 @@ import csv
 from typing import Optional, List, Dict, Any
 import threading
 
-from ..engine.searcher import find_best_move
-from ..eval.ml_bridge import evaluate_board_with_ml
-from ..eval.heuristic import evaluate_board as eval_hc
-from ..cli.vs_stockfish import EngineMatch
+from chess_engine.engine.searcher import find_best_move
+from chess_engine.eval.ml_bridge import evaluate_board_with_ml
+from chess_engine.eval.heuristic import evaluate_board as eval_hc
+from chess_engine.cli.vs_stockfish import EngineMatch
 
 # GPUサポート（オプション）
 try:
