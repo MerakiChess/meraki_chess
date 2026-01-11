@@ -31,6 +31,9 @@ except Exception:
 try:
     from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
     from matplotlib.figure import Figure
+    import matplotlib
+    matplotlib.rcParams['font.sans-serif'] = ['MS Gothic', 'Yu Gothic', 'Hiragino Sans']
+    matplotlib.rcParams['axes.unicode_minus'] = False
     _HAVE_MATPLOTLIB = True
 except Exception:
     _HAVE_MATPLOTLIB = False
@@ -385,6 +388,11 @@ class MainFrame(wx.Frame):
         self.monitor_ax3 = self.monitor_figure.add_subplot(223)  # Memory
         self.monitor_ax4 = self.monitor_figure.add_subplot(224)  # GPU (if available)
         self.monitor_canvas = FigureCanvas(self.monitor_graph_panel, -1, self.monitor_figure)
+        
+        # グラフパネルのレイアウト設定
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.monitor_canvas, 1, wx.EXPAND)
+        self.monitor_graph_panel.SetSizer(sizer)
     
     def _on_monitor_mode_changed(self, event):
         """監視モード変更時の処理"""
@@ -437,6 +445,7 @@ class MainFrame(wx.Frame):
         
         self.monitor_start_btn.Enable(False)
         self.monitor_stop_btn.Enable(True)
+        self.monitor_monitoring = True  # ★ この行を追加
         self.monitor_log_ctrl.AppendText(f"深さベース監視開始: 深さ={min_depth}-{max_depth}, 試行={trials}\n")
         
         # スレッドで実行
@@ -451,28 +460,33 @@ class MainFrame(wx.Frame):
         """深さベースのリソース監視を実行"""
         try:
             self.monitor_rows = []
+            wx.CallAfter(self.monitor_log_ctrl.AppendText, f"スレッド開始: 深さ範囲={min_depth}-{max_depth}, 試行={trials}\n")
             
             for depth in range(min_depth, max_depth + 1):
+                if not self.monitor_monitoring:
+                    wx.CallAfter(self.monitor_log_ctrl.AppendText, "監視キャンセル\n")
+                    break
+                
                 for trial in range(trials):
                     if not self.monitor_monitoring:
                         break
                     
                     wx.CallAfter(
                         self.monitor_log_ctrl.AppendText,
-                        f"深さ {depth}, 試行 {trial+1}/{trials} ... "
+                        f"深さ {depth}, 試行 {trial+1}/{trials} 実行中... "
                     )
                     
-                    # リソース監視開始
-                    proc = _init_process(None)
-                    psutil.cpu_percent(None)
-                    
-                    t_start = time.perf_counter()
-                    rss_start = proc.memory_info().rss / (1024 * 1024)
-                    cpu_start = proc.cpu_percent(None)
-                    
-                    # 初期局面で探索実行
-                    board = chess.Board()
                     try:
+                        # リソース監視開始
+                        proc = _init_process(None)
+                        psutil.cpu_percent(None)
+                        
+                        t_start = time.perf_counter()
+                        rss_start = proc.memory_info().rss / (1024 * 1024)
+                        cpu_start = proc.cpu_percent(None)
+                        
+                        # 初期局面で探索実行
+                        board = chess.Board()
                         uci = find_best_move(
                             board,
                             depth=depth,
@@ -480,38 +494,48 @@ class MainFrame(wx.Frame):
                             coeff_path=None,
                             ml_alpha=0.0,
                         )
+                        
+                        elapsed = time.perf_counter() - t_start
+                        rss_end = proc.memory_info().rss / (1024 * 1024)
+                        cpu_end = proc.cpu_percent(None)
+                        
+                        self.monitor_rows.append({
+                            "depth": depth,
+                            "trial": trial + 1,
+                            "elapsed_sec": round(elapsed, 3),
+                            "rss_mb": round(rss_end, 2),
+                            "rss_delta_mb": round(rss_end - rss_start, 2),
+                            "cpu_percent": round(cpu_end, 2),
+                        })
+                        
+                        wx.CallAfter(
+                            self.monitor_log_ctrl.AppendText,
+                            f"完了 (時間: {elapsed:.2f}s, メモリ: {rss_end:.1f}MB, CPU: {cpu_end:.1f}%)\n"
+                        )
                     except Exception as e:
-                        wx.CallAfter(self.monitor_log_ctrl.AppendText, f"エラー: {e}\n")
+                        wx.CallAfter(
+                            self.monitor_log_ctrl.AppendText,
+                            f"エラー: {str(e)}\n"
+                        )
+                        import traceback
+                        wx.CallAfter(
+                            self.monitor_log_ctrl.AppendText,
+                            f"スタックトレース: {traceback.format_exc()}\n"
+                        )
                         continue
-                    
-                    elapsed = time.perf_counter() - t_start
-                    rss_end = proc.memory_info().rss / (1024 * 1024)
-                    cpu_end = proc.cpu_percent(None)
-                    
-                    self.monitor_rows.append({
-                        "depth": depth,
-                        "trial": trial + 1,
-                        "elapsed_sec": round(elapsed, 3),
-                        "rss_mb": round(rss_end, 2),
-                        "rss_delta_mb": round(rss_end - rss_start, 2),
-                        "cpu_percent": round(cpu_end, 2),
-                    })
-                    
-                    wx.CallAfter(
-                        self.monitor_log_ctrl.AppendText,
-                        f"完了 (時間: {elapsed:.2f}s, メモリ: {rss_end:.1f}MB, CPU: {cpu_end:.1f}%)\n"
-                    )
-                
-                if not self.monitor_monitoring:
-                    break
             
+            wx.CallAfter(self.monitor_log_ctrl.AppendText, f"データ収集完了: {len(self.monitor_rows)}行\n")
             wx.CallAfter(self._update_depth_graph)
+            wx.CallAfter(self.monitor_log_ctrl.AppendText, "グラフ更新完了\n")
         except Exception as e:
-            wx.CallAfter(self.monitor_log_ctrl.AppendText, f"エラー: {str(e)}\n")
+            wx.CallAfter(self.monitor_log_ctrl.AppendText, f"スレッドエラー: {str(e)}\n")
+            import traceback
+            wx.CallAfter(self.monitor_log_ctrl.AppendText, f"スタックトレース: {traceback.format_exc()}\n")
         finally:
             self.monitor_monitoring = False
             wx.CallAfter(self.monitor_start_btn.Enable, True)
             wx.CallAfter(self.monitor_stop_btn.Enable, False)
+            wx.CallAfter(self.monitor_log_ctrl.AppendText, "スレッド終了\n")
 
     def _on_monitor_stop(self, event):
         self.monitor_monitoring = False
@@ -573,12 +597,15 @@ class MainFrame(wx.Frame):
         self.monitor_ax1.clear()
         if y:
             self.monitor_ax1.plot(x_p, y)
-            self.monitor_ax1.set_title("Process CPU%")
+            self.monitor_ax1.set_title(f"Process CPU% (最大: {psutil.cpu_count()}コア × 100%)")
+            max_cpu = max(y) if y else 100
+            self.monitor_ax1.set_ylim(0, max(max_cpu * 1.1, 100))
         
         # System CPU
         self.monitor_ax2.clear()
         self.monitor_ax2.plot(x, [r["sys_cpu_percent"] for r in self.monitor_rows])
         self.monitor_ax2.set_title("System CPU%")
+        self.monitor_ax2.set_ylim(0, 100)
         
         # Memory
         self.monitor_ax3.clear()
@@ -604,8 +631,9 @@ class MainFrame(wx.Frame):
             self.monitor_ax4.legend()
             self.monitor_ax4.set_title("GPU")
         else:
-            self.monitor_ax4.text(0.5, 0.5, "GPU利用不可", ha="center", va="center", transform=self.monitor_ax4.transAxes)
+            self.monitor_ax4.text(0.5, 0.5, "GPU利用不可", ha="center", va="center", transform=self.monitor_ax4.transAxes, fontname='MS Gothic', fontsize=12)
         
+        self.monitor_figure.tight_layout()
         self.monitor_canvas.draw()
 
     def _update_depth_graph(self):
@@ -626,6 +654,9 @@ class MainFrame(wx.Frame):
             depth_stats[d]["elapsed"].append(row["elapsed_sec"])
             depth_stats[d]["rss_delta"].append(row["rss_delta_mb"])
             depth_stats[d]["cpu"].append(row["cpu_percent"])
+        
+        if not depth_stats:
+            return
         
         depths = sorted(depth_stats.keys())
         
@@ -665,7 +696,9 @@ class MainFrame(wx.Frame):
         self.monitor_ax3.fill_between(depths, cpu_min, cpu_max, alpha=0.3, color='red', label="範囲")
         self.monitor_ax3.set_xlabel("探索深さ")
         self.monitor_ax3.set_ylabel("CPU使用率 (%)")
-        self.monitor_ax3.set_title("CPU使用率 vs 探索深さ")
+        self.monitor_ax3.set_title(f"CPU使用率 vs 探索深さ (最大: {psutil.cpu_count()}コア × 100%)")
+        max_cpu_val = max(cpu_max) if cpu_max else 100
+        self.monitor_ax3.set_ylim(0, max(max_cpu_val * 1.1, 100))
         self.monitor_ax3.legend()
         self.monitor_ax3.grid(True, alpha=0.3)
         
@@ -679,8 +712,9 @@ class MainFrame(wx.Frame):
         summary_text += f"最大実行時間: {max(elapsed_avg):.2f}秒\n"
         summary_text += f"最大メモリ変化: {max(rss_avg):.2f}MB\n"
         self.monitor_ax4.text(0.1, 0.9, summary_text, transform=self.monitor_ax4.transAxes,
-                             fontsize=11, verticalalignment='top', family='monospace')
+                             fontsize=11, verticalalignment='top', family='monospace', fontname='MS Gothic')
         
+        self.monitor_figure.tight_layout()
         self.monitor_canvas.draw()
 
     def _on_monitor_save(self, event):
