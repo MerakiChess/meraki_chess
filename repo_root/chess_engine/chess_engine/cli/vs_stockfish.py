@@ -2,6 +2,10 @@
 Stockfishとの対戦プログラム
 勝率計測とレーティング計算機能付き
 """
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 import chess
 import chess.engine
 import chess.pgn
