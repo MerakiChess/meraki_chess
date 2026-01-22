@@ -652,7 +652,9 @@ class MainFrame(wx.Frame):
         avg_cpu_inc = sum(cpu_increments) / len(cpu_increments)
 
         # 各深さで、増分コストが平均を超えるかどうかをチェック（少なくとも2つのメトリック）
-        for i in range(len(elapsed_increments),0,-1):
+        # 深さが最大になるように、最後の均衡点を見つける
+        equilibrium_index = None
+        for i in range(len(elapsed_increments)):
             count_exceed = 0
             if elapsed_increments[i] < avg_elapsed_inc:
                 count_exceed += 1
@@ -661,7 +663,10 @@ class MainFrame(wx.Frame):
             if cpu_increments[i] < avg_cpu_inc:
                 count_exceed += 1
             if count_exceed >= 2:  # 少なくとも2つのメトリックで平均を超える
-                return depths[i+1]  # 次の深さが均衡点
+                equilibrium_index = i
+
+        if equilibrium_index is not None:
+            return depths[equilibrium_index + 1]  # 次の深さが均衡点
 
         return None  # 均衡点が見つからない
 
