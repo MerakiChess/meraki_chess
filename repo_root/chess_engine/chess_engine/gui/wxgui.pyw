@@ -636,6 +636,35 @@ class MainFrame(wx.Frame):
         self.monitor_figure.tight_layout()
         self.monitor_canvas.draw()
 
+    def _calculate_equilibrium_point(self, depths, elapsed_avg, rss_avg, cpu_avg):
+        """均衡点を計算する"""
+        if len(depths) < 3:
+            return None  # 少なくとも3つの深さが必要
+
+        # 各メトリックの増分コストを計算
+        elapsed_increments = [elapsed_avg[i+1] - elapsed_avg[i] for i in range(len(elapsed_avg)-1)]
+        rss_increments = [rss_avg[i+1] - rss_avg[i] for i in range(len(rss_avg)-1)]
+        cpu_increments = [cpu_avg[i+1] - cpu_avg[i] for i in range(len(cpu_avg)-1)]
+
+        # 各メトリックの平均増分コスト
+        avg_elapsed_inc = sum(elapsed_increments) / len(elapsed_increments)
+        avg_rss_inc = sum(rss_increments) / len(rss_increments)
+        avg_cpu_inc = sum(cpu_increments) / len(cpu_increments)
+
+        # 各深さで、増分コストが平均を超えるかどうかをチェック（少なくとも2つのメトリック）
+        for i in range(len(elapsed_increments)):
+            count_exceed = 0
+            if elapsed_increments[i] > avg_elapsed_inc:
+                count_exceed += 1
+            if rss_increments[i] > avg_rss_inc:
+                count_exceed += 1
+            if cpu_increments[i] > avg_cpu_inc:
+                count_exceed += 1
+            if count_exceed >= 2:  # 少なくとも2つのメトリックで平均を超える
+                return depths[i+1]  # 次の深さが均衡点
+
+        return None  # 均衡点が見つからない
+
     def _update_depth_graph(self):
         """深さベースのグラフを更新"""
         if not self.monitor_rows or not _HAVE_MATPLOTLIB:
@@ -702,6 +731,9 @@ class MainFrame(wx.Frame):
         self.monitor_ax3.legend()
         self.monitor_ax3.grid(True, alpha=0.3)
         
+        # 均衡点の計算
+        equilibrium_depth = self._calculate_equilibrium_point(depths, elapsed_avg, rss_avg, cpu_avg)
+
         # グラフ4: 全体サマリー
         self.monitor_ax4.clear()
         self.monitor_ax4.axis('off')
@@ -711,6 +743,10 @@ class MainFrame(wx.Frame):
         summary_text += f"総試行回数: {len(self.monitor_rows)}\n"
         summary_text += f"最大実行時間: {max(elapsed_avg):.2f}秒\n"
         summary_text += f"最大メモリ変化: {max(rss_avg):.2f}MB\n"
+        if equilibrium_depth is not None:
+            summary_text += f"均衡点 (深さ): {equilibrium_depth}\n"
+        else:
+            summary_text += "均衡点: 未達\n"
         self.monitor_ax4.text(0.1, 0.9, summary_text, transform=self.monitor_ax4.transAxes,
                              fontsize=11, verticalalignment='top', family='monospace', fontname='MS Gothic')
         
