@@ -2,20 +2,41 @@
 Stockfishとの対戦プログラム
 勝率計測とレーティング計算機能付き
 """
+import sys
+import os
+
+# パスの設定（直接実行時のための相対インポート対応）
+if __name__ == "__main__":
+    # chess_engineディレクトリの親ディレクトリをパスに追加
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(os.path.dirname(current_dir))
+    sys.path.insert(0, parent_dir)
+
 import chess
 import chess.engine
 import chess.pgn
 from typing import Optional, List, Dict, Any, Tuple
 import io
-import os
 import csv
 from datetime import datetime
 import time
 from pathlib import Path
 import json
 
-from ..engine.searcher import find_best_move
-from ..eval.heuristic import evaluate_board as eval_hc
+try:
+    from ..engine.searcher import find_best_move
+    from ..eval.heuristic import evaluate_board as eval_hc
+except ImportError:
+    # 直接実行時のフォールバック
+    try:
+        from chess_engine.engine.searcher import find_best_move
+        from chess_engine.eval.heuristic import evaluate_board as eval_hc
+    except ImportError:
+        print("エラー: chess_engineのモジュールをインポートできません")
+        print("以下のいずれかの方法で実行してください:")
+        print("1. GUIから実行してください（wxgui.pyw）")
+        print("2. python -m chess_engine.cli.vs_stockfish で実行")
+        sys.exit(1)
 
 
 class EngineMatch:
@@ -26,7 +47,8 @@ class EngineMatch:
                  meraki_depth: int = 5,
                  meraki_time_ms: int = 1500,
                  stockfish_depth: int = 15,
-                 stockfish_time_ms: int = 1000):
+                 stockfish_time_ms: int = 1000,
+                 stockfish_skill_level: int = 20):
         """
         Args:
             engine_path: Stockfishの実行ファイルパス
@@ -34,11 +56,13 @@ class EngineMatch:
             meraki_time_ms: Merakiエンジンの思考時間(ms)
             stockfish_depth: Stockfishの探索深さ
             stockfish_time_ms: Stockfishの思考時間(ms)
+            stockfish_skill_level: Stockfishの強さレベル(0-20、20が最強)
         """
         self.meraki_depth = meraki_depth
         self.meraki_time_ms = meraki_time_ms
         self.stockfish_depth = stockfish_depth
         self.stockfish_time_ms = stockfish_time_ms
+        self.stockfish_skill_level = max(0, min(20, stockfish_skill_level))  # 0-20に制限
         
         # Stockfishのエンジンを初期化
         if engine_path is None:
@@ -73,6 +97,8 @@ class EngineMatch:
         if self.sf_engine is None:
             return None
         try:
+            # Skill Levelを設定（0-20）
+            self.sf_engine.configure({"Skill Level": self.stockfish_skill_level})
             result = self.sf_engine.play(
                 board,
                 chess.engine.Limit(depth=self.stockfish_depth, time=self.stockfish_time_ms / 1000.0)
@@ -148,6 +174,7 @@ class EngineMatch:
                 "meraki_white": meraki_white,
                 "moves": len(uci_history),
                 "time_sec": elapsed,
+                "moves_uci": uci_history,  # 手順データを追加
             }
             results["games"].append(game_info)
             results["total_time_sec"] += elapsed
