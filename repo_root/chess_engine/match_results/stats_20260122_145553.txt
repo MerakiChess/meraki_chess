@@ -1,0 +1,12 @@
+=== 対戦統計情報 ===
+
+総ゲーム数: 5
+Meraki勝利: 0
+Stockfish勝利: 0
+引き分け: 5
+
+meraki_win_rate: 50.0
+meraki_score: 2.5
+avg_game_length: 0.6
+avg_game_time_sec: 0.77
+estimated_elo_diff: 0
