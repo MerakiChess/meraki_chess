@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 import os
 import csv
+import io
 from typing import Optional, List, Dict, Any
 import threading
 
@@ -188,6 +189,7 @@ class MainFrame(wx.Frame):
         self.match = None
         self.match_thread = None
         self.match_running = False
+        self.match_last_results = None  # 最後の対戦結果を保存
 
         # メインパネルとノートブック
         notebook = wx.Notebook(self)
@@ -217,7 +219,7 @@ class MainFrame(wx.Frame):
     def _build_game_ui(self, panel):
         vbox = wx.BoxSizer(wx.VERTICAL)
 
-        # ボタン類
+        # ボタン類と設定
         hbox = wx.BoxSizer(wx.HORIZONTAL)
 
         undo_btn = wx.Button(panel, label="⟲ Undo")
@@ -231,6 +233,11 @@ class MainFrame(wx.Frame):
         new_game_btn = wx.Button(panel, label="🆕 New Game")
         new_game_btn.Bind(wx.EVT_BUTTON, self.on_new_game)
         hbox.Add(new_game_btn, flag=wx.LEFT, border=5)
+        
+        # AI深さ設定
+        hbox.Add(wx.StaticText(panel, label="AI深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 15)
+        self.game_ai_depth_ctrl = wx.SpinCtrl(panel, initial=5, min=1, max=20)
+        hbox.Add(self.game_ai_depth_ctrl, 0, wx.LEFT, 5)
 
         vbox.Add(hbox, flag=wx.EXPAND | wx.ALL, border=5)
 
@@ -274,13 +281,13 @@ class MainFrame(wx.Frame):
         self.monitor_depth_panel = wx.Panel(panel)
         depth_sizer = wx.BoxSizer(wx.HORIZONTAL)
         depth_sizer.Add(wx.StaticText(self.monitor_depth_panel, label="最小深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        self.monitor_min_depth_ctrl = wx.SpinCtrl(self.monitor_depth_panel, value="1", min=1, max=20)
+        self.monitor_min_depth_ctrl = wx.SpinCtrl(self.monitor_depth_panel, initial=1, min=1, max=20)
         depth_sizer.Add(self.monitor_min_depth_ctrl, 0, wx.ALL, 5)
         depth_sizer.Add(wx.StaticText(self.monitor_depth_panel, label="最大深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        self.monitor_max_depth_ctrl = wx.SpinCtrl(self.monitor_depth_panel, value="12", min=1, max=20)
+        self.monitor_max_depth_ctrl = wx.SpinCtrl(self.monitor_depth_panel, initial=12, min=1, max=20)
         depth_sizer.Add(self.monitor_max_depth_ctrl, 0, wx.ALL, 5)
         depth_sizer.Add(wx.StaticText(self.monitor_depth_panel, label="試行回数:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        self.monitor_trials_ctrl = wx.SpinCtrl(self.monitor_depth_panel, value="3", min=1, max=10)
+        self.monitor_trials_ctrl = wx.SpinCtrl(self.monitor_depth_panel, initial=3, min=1, max=10)
         depth_sizer.Add(self.monitor_trials_ctrl, 0, wx.ALL, 5)
         self.monitor_depth_panel.SetSizer(depth_sizer)
         main_sizer.Add(self.monitor_depth_panel, 0, wx.EXPAND | wx.ALL, 5)
@@ -324,16 +331,20 @@ class MainFrame(wx.Frame):
         config_sizer = wx.BoxSizer(wx.HORIZONTAL)
         
         config_sizer.Add(wx.StaticText(panel, label="ゲーム数:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        self.match_games_ctrl = wx.SpinCtrl(panel, value="5", min=1, max=100)
+        self.match_games_ctrl = wx.SpinCtrl(panel, initial=5, min=1, max=100)
         config_sizer.Add(self.match_games_ctrl, 0, wx.ALL, 5)
         
         config_sizer.Add(wx.StaticText(panel, label="Meraki深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        self.match_meraki_depth_ctrl = wx.SpinCtrl(panel, value="5", min=1, max=20)
+        self.match_meraki_depth_ctrl = wx.SpinCtrl(panel, initial=5, min=1, max=20)
         config_sizer.Add(self.match_meraki_depth_ctrl, 0, wx.ALL, 5)
         
         config_sizer.Add(wx.StaticText(panel, label="Stockfish深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        self.match_sf_depth_ctrl = wx.SpinCtrl(panel, value="15", min=1, max=25)
+        self.match_sf_depth_ctrl = wx.SpinCtrl(panel, initial=8, min=1, max=25)
         config_sizer.Add(self.match_sf_depth_ctrl, 0, wx.ALL, 5)
+        
+        config_sizer.Add(wx.StaticText(panel, label="Stockfish強さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.match_sf_skill_ctrl = wx.SpinCtrl(panel, initial=10, min=0, max=20)
+        config_sizer.Add(self.match_sf_skill_ctrl, 0, wx.ALL, 5)
         
         main_sizer.Add(config_sizer, 0, wx.EXPAND | wx.ALL, 5)
         
@@ -355,6 +366,11 @@ class MainFrame(wx.Frame):
         self.match_stop_btn.Enable(False)
         btn_sizer.Add(self.match_stop_btn, 0, wx.ALL, 5)
         
+        self.match_save_btn = wx.Button(panel, label="💾 結果を保存")
+        self.match_save_btn.Bind(wx.EVT_BUTTON, self._on_match_save)
+        self.match_save_btn.Enable(False)
+        btn_sizer.Add(self.match_save_btn, 0, wx.ALL, 5)
+        
         main_sizer.Add(btn_sizer, 0, wx.ALL, 5)
         
         # ログ/結果
@@ -372,12 +388,65 @@ class MainFrame(wx.Frame):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         
         main_sizer.Add(wx.StaticText(panel, label="対戦統計情報:"), 0, wx.ALL, 5)
-        self.stats_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 200))
+        self.stats_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 150))
         main_sizer.Add(self.stats_ctrl, 0, wx.EXPAND | wx.ALL, 5)
         
-        main_sizer.Add(wx.StaticText(panel, label="直近対戦結果:"), 0, wx.ALL, 5)
-        self.recent_games_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 200))
-        main_sizer.Add(self.recent_games_ctrl, 1, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(wx.StaticText(panel, label="ゲーム再生:"), 0, wx.ALL, 5)
+        
+        # ゲーム選択と再生パネル
+        replay_panel_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        replay_panel_sizer.Add(wx.StaticText(panel, label="ゲーム選択:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.replay_game_choice = wx.Choice(panel)
+        replay_panel_sizer.Add(self.replay_game_choice, 1, wx.ALL, 5)
+        
+        replay_play_btn = wx.Button(panel, label="▶ 再生")
+        replay_play_btn.Bind(wx.EVT_BUTTON, self._on_replay_game)
+        replay_panel_sizer.Add(replay_play_btn, 0, wx.ALL, 5)
+        
+        main_sizer.Add(replay_panel_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        
+        # 再生用チェスボード
+        self.replay_board_panel = wx.Panel(panel, size=(SQUARE_SIZE * 8, SQUARE_SIZE * 8))
+        self.replay_board_panel.SetBackgroundColour(wx.Colour(50, 50, 50))
+        main_sizer.Add(wx.StaticText(panel, label="棋譜表示:"), 0, wx.ALL, 5)
+        main_sizer.Add(self.replay_board_panel, 0, wx.ALL, 5)
+        
+        # 手順コントロール
+        control_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.replay_prev_btn = wx.Button(panel, label="⏮ 最初")
+        self.replay_prev_btn.Bind(wx.EVT_BUTTON, self._on_replay_prev)
+        self.replay_prev_btn.Enable(False)
+        control_sizer.Add(self.replay_prev_btn, 0, wx.ALL, 5)
+        
+        self.replay_back_btn = wx.Button(panel, label="◀ 戻す")
+        self.replay_back_btn.Bind(wx.EVT_BUTTON, self._on_replay_back)
+        self.replay_back_btn.Enable(False)
+        control_sizer.Add(self.replay_back_btn, 0, wx.ALL, 5)
+        
+        self.replay_move_num = wx.StaticText(panel, label="手数: 0/0")
+        control_sizer.Add(self.replay_move_num, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        
+        self.replay_forward_btn = wx.Button(panel, label="進む ▶")
+        self.replay_forward_btn.Bind(wx.EVT_BUTTON, self._on_replay_forward)
+        self.replay_forward_btn.Enable(False)
+        control_sizer.Add(self.replay_forward_btn, 0, wx.ALL, 5)
+        
+        self.replay_last_btn = wx.Button(panel, label="最後 ⏭")
+        self.replay_last_btn.Bind(wx.EVT_BUTTON, self._on_replay_last)
+        self.replay_last_btn.Enable(False)
+        control_sizer.Add(self.replay_last_btn, 0, wx.ALL, 5)
+        
+        main_sizer.Add(control_sizer, 0, wx.ALL, 5)
+        
+        # PGN表示
+        main_sizer.Add(wx.StaticText(panel, label="棋譜（PGN）:"), 0, wx.ALL, 5)
+        self.replay_pgn_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_WORDWRAP, size=(-1, 150))
+        main_sizer.Add(self.replay_pgn_ctrl, 1, wx.EXPAND | wx.ALL, 5)
+        
+        # 再生用の内部状態
+        self.replay_board = None
+        self.replay_moves = []
+        self.replay_current_move = 0
         
         panel.SetSizer(main_sizer)
     
@@ -814,65 +883,167 @@ class MainFrame(wx.Frame):
             return
         
         num_games = self.match_games_ctrl.GetValue()
-        meraki_depth = self.match_meraki_depth_ctrl.GetValue()
-        stockfish_depth = self.match_sf_depth_ctrl.GetValue()
         stockfish_path = self.match_sf_path_ctrl.GetValue()
+        
+        # Stockfishの接続確認
+        actual_path = self._find_and_verify_stockfish(stockfish_path)
+        if actual_path is None:
+            return
         
         self.match_running = True
         self.match_start_btn.Enable(False)
         self.match_stop_btn.Enable(True)
+        self.match_games_ctrl.Enable(False)  # ゲーム数は固定
+        self.match_sf_path_ctrl.Enable(False)  # パスは固定
+        # 深さコントロールは有効なまま（対戦中に変更可能）
+        
         self.match_log_ctrl.AppendText(f"\n=== 対戦開始 ===\n")
-        self.match_log_ctrl.AppendText(f"ゲーム数: {num_games}, Meraki深さ: {meraki_depth}, Stockfish深さ: {stockfish_depth}\n\n")
+        self.match_log_ctrl.AppendText(f"ゲーム数: {num_games}\n")
+        self.match_log_ctrl.AppendText("(対戦中も深さを変更できます)\n\n")
         
         # スレッドで対戦実行
         self.match_thread = threading.Thread(
             target=self._run_match_thread,
-            args=(num_games, meraki_depth, stockfish_depth, stockfish_path),
+            args=(num_games, actual_path),
             daemon=True
         )
         self.match_thread.start()
     
-    def _run_match_thread(self, num_games, meraki_depth, stockfish_depth, stockfish_path):
+    def _run_match_thread(self, num_games, stockfish_path):
         """対戦実行スレッド"""
         try:
-            self.match = EngineMatch(
-                engine_path=stockfish_path,
-                meraki_depth=meraki_depth,
-                meraki_time_ms=1500,
-                stockfish_depth=stockfish_depth,
-                stockfish_time_ms=1000,
-            )
+            results = {
+                'total_games': num_games,
+                'meraki_wins': 0,
+                'stockfish_wins': 0,
+                'draws': 0,
+                'games': []
+            }
             
-            results = self.match.play_matches(num_matches=num_games)
-            stats = self.match.calculate_stats(results)
+            for game_num in range(1, num_games + 1):
+                if not self.match_running:
+                    wx.CallAfter(self.match_log_ctrl.AppendText, f"\n対戦中止\n")
+                    break
+                
+                # 現在の深さ設定を読み込む
+                meraki_depth = self.match_meraki_depth_ctrl.GetValue()
+                stockfish_depth = self.match_sf_depth_ctrl.GetValue()
+                
+                wx.CallAfter(
+                    self.match_log_ctrl.AppendText,
+                    f"ゲーム {game_num}/{num_games} 開始 "
+                    f"(Meraki深さ: {meraki_depth}, Stockfish深さ: {stockfish_depth})\n"
+                )
+                
+                try:
+                    self.match = EngineMatch(
+                        engine_path=stockfish_path,
+                        meraki_depth=meraki_depth,
+                        meraki_time_ms=1500,
+                        stockfish_depth=stockfish_depth,
+                        stockfish_time_ms=1000,
+                        stockfish_skill_level=self.match_sf_skill_ctrl.GetValue(),
+                    )
+                    
+                    game_results = self.match.play_matches(num_matches=1)
+                    game_info = game_results['games'][0]
+                    
+                    # 結果を統一形式に変換
+                    raw_result = game_info['result']
+                    if raw_result == "1-0":
+                        # 白（1）が勝利
+                        result_str = 'meraki_win' if game_info['meraki_white'] else 'stockfish_win'
+                    elif raw_result == "0-1":
+                        # 黒（0）が勝利
+                        result_str = 'stockfish_win' if game_info['meraki_white'] else 'meraki_win'
+                    else:
+                        result_str = 'draw'
+                    
+                    game_info['result'] = result_str
+                    
+                    # 結果を集計
+                    results['games'].append(game_info)
+                    if game_info['result'] == 'meraki_win':
+                        results['meraki_wins'] += 1
+                    elif game_info['result'] == 'stockfish_win':
+                        results['stockfish_wins'] += 1
+                    else:
+                        results['draws'] += 1
+                    
+                    meraki_color = "白" if game_info['meraki_white'] else "黒"
+                    wx.CallAfter(
+                        self.match_log_ctrl.AppendText,
+                        f"  結果: {game_info['result']}, Meraki色: {meraki_color}, "
+                        f"手数: {game_info['moves']}, 時間: {game_info['time_sec']:.1f}秒\n"
+                    )
+                    
+                    if self.match:
+                        self.match.close()
+                        self.match = None
+                    
+                except Exception as e:
+                    wx.CallAfter(
+                        self.match_log_ctrl.AppendText,
+                        f"  ゲーム {game_num} エラー: {str(e)}\n"
+                    )
+                    if self.match:
+                        self.match.close()
+                        self.match = None
             
-            # GUI更新
+            # 統計計算
+            stats = self._calculate_stats(results)
             wx.CallAfter(self._update_match_results, results, stats)
             
         except Exception as e:
-            wx.CallAfter(self.match_log_ctrl.AppendText, f"エラー: {str(e)}\n")
+            wx.CallAfter(self.match_log_ctrl.AppendText, f"スレッドエラー: {str(e)}\n")
         finally:
             self.match_running = False
             wx.CallAfter(self.match_start_btn.Enable, True)
             wx.CallAfter(self.match_stop_btn.Enable, False)
-            if self.match:
-                self.match.close()
+            wx.CallAfter(self.match_games_ctrl.Enable, True)
+            wx.CallAfter(self.match_sf_path_ctrl.Enable, True)
+            wx.CallAfter(self.match_log_ctrl.AppendText, "対戦終了\n")
+    
+    def _calculate_stats(self, results):
+        """対戦結果から統計情報を計算"""
+        total = results['total_games']
+        meraki_wins = results['meraki_wins']
+        draws = results['draws']
+        
+        meraki_score = meraki_wins + draws * 0.5
+        meraki_win_rate = (meraki_score / total * 100) if total > 0 else 0
+        
+        game_lengths = [g['moves'] for g in results['games']]
+        avg_game_length = sum(game_lengths) / len(game_lengths) if game_lengths else 0
+        
+        game_times = [g['time_sec'] for g in results['games']]
+        avg_game_time_sec = sum(game_times) / len(game_times) if game_times else 0
+        
+        # 簡易的なELO差推定
+        meraki_win_rate_decimal = meraki_win_rate / 100
+        if 0 < meraki_win_rate_decimal < 1:
+            estimated_elo_diff = int(400 * (2 * meraki_win_rate_decimal - 1) / (2 * meraki_win_rate_decimal * (1 - meraki_win_rate_decimal)))
+        elif meraki_win_rate_decimal == 1:
+            estimated_elo_diff = 400
+        elif meraki_win_rate_decimal == 0:
+            estimated_elo_diff = -400
+        else:
+            estimated_elo_diff = 0
+        
+        return {
+            'meraki_win_rate': meraki_win_rate,
+            'meraki_score': meraki_score,
+            'avg_game_length': avg_game_length,
+            'avg_game_time_sec': avg_game_time_sec,
+            'estimated_elo_diff': estimated_elo_diff,
+        }
     
     def _update_match_results(self, results, stats):
         """対戦結果を画面に表示"""
         self.match_log_ctrl.AppendText(f"\n=== 対戦完了 ===\n")
         self.match_log_ctrl.AppendText(f"総ゲーム数: {results['total_games']}\n")
         
-        for game in results['games']:
-            meraki_color = "白" if game['meraki_white'] else "黒"
-            self.match_log_ctrl.AppendText(
-                f"ゲーム {game['game_num']}: 結果={game['result']}, "
-                f"Meraki={meraki_color}, 手数={game['moves']}, "
-                f"時間={game['time_sec']:.1f}秒\n"
-            )
-        
-        result_text = f"""
-=== 統計情報 ===
+        result_text = f"""=== 統計情報 ===
 総ゲーム数: {results['total_games']}
 Meraki勝利: {results['meraki_wins']}
 Stockfish勝利: {results['stockfish_wins']}
@@ -887,17 +1058,384 @@ Stockfish勝利: {results['stockfish_wins']}
 """
         self.match_result_ctrl.SetValue(result_text)
         
-        # 統計タブも更新
-        self.stats_ctrl.AppendText(result_text)
+        # 統計タブは新しい結果で置き換え（上書き）
+        self.stats_ctrl.SetValue(result_text)
         
-        # 結果をファイル保存
-        self.match.save_results(results)
+        # 結果を保存して保存ボタンを有効にする
+        self.match_last_results = {
+            'results': results,
+            'stats': stats,
+            'timestamp': datetime.now()
+        }
+        self.match_save_btn.Enable(True)
+        
+        # ゲーム選択ドロップダウンを更新
+        self._update_game_choice_dropdown(results)
     
     def _on_match_stop(self, event):
         """対戦中止"""
         if self.match_running:
             self.match_log_ctrl.AppendText("\n対戦を中止します...\n")
             self.match_running = False
+    
+    def _update_game_choice_dropdown(self, results):
+        """ゲーム選択ドロップダウンを更新"""
+        self.replay_game_choice.Clear()
+        for i, game in enumerate(results['games'], 1):
+            result_str = game['result'].replace('_', ' ')
+            label = f"ゲーム {i}: {result_str} ({game['moves']}手)"
+            self.replay_game_choice.Append(label)
+        
+        # 最初のゲームを選択
+        if results['games']:
+            self.replay_game_choice.SetSelection(0)
+    
+    def _on_match_save(self, event):
+        """対戦結果をCSVに保存"""
+        if self.match_last_results is None:
+            wx.MessageBox("保存する対戦結果がありません。", "エラー", wx.ICON_ERROR)
+            return
+        
+        outdir = "match_results"
+        os.makedirs(outdir, exist_ok=True)
+        csv_path = os.path.join(outdir, "match_history.csv")
+        
+        results = self.match_last_results['results']
+        stats = self.match_last_results['stats']
+        timestamp = self.match_last_results['timestamp']
+        
+        # 全ゲームのデータを整形
+        rows = []
+        for game_idx, game in enumerate(results['games'], 1):
+            row = {
+                'timestamp': timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                'game_num': game_idx,
+                'total_games': results['total_games'],
+                'result': game['result'],
+                'meraki_white': 'Yes' if game['meraki_white'] else 'No',
+                'moves': game['moves'],
+                'time_sec': round(game['time_sec'], 2),
+            }
+            rows.append(row)
+        
+        # 統計行を最後に追加
+        stats_row = {
+            'timestamp': timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            'game_num': '[統計]',
+            'total_games': results['total_games'],
+            'result': f"勝率: {stats['meraki_win_rate']:.1f}%",
+            'meraki_white': f"Win: {results['meraki_wins']}",
+            'moves': f"Loss: {results['stockfish_wins']}",
+            'time_sec': f"Draw: {results['draws']}",
+        }
+        rows.append(stats_row)
+        
+        # CSVに追記
+        file_exists = os.path.isfile(csv_path)
+        
+        fieldnames = ['timestamp', 'game_num', 'total_games', 'result', 'meraki_white', 'moves', 'time_sec']
+        
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            
+            # ファイルが存在しない場合、ヘッダーを書き込み
+            if not file_exists:
+                writer.writeheader()
+            
+            # データを追記
+            writer.writerows(rows)
+        
+        success_msg = f"""対戦結果を保存しました：
+
+ファイル: {csv_path}
+
+保存内容:
+- {len(results['games'])} ゲーム分のゲーム詳細
+- 統計情報（勝率、ELO差など）
+
+※ 複数回実行すると、前回の結果の下に追記されます"""
+        
+        self.match_log_ctrl.AppendText(f"\n✓ CSV保存完了: {csv_path}\n")
+        wx.MessageBox(success_msg, "保存完了", wx.ICON_INFORMATION)
+    
+    def _on_replay_game(self, event):
+        """ゲーム再生開始"""
+        if self.match_last_results is None or not self.match_last_results['results']['games']:
+            wx.MessageBox("再生するゲームがありません。", "エラー", wx.ICON_ERROR)
+            return
+        
+        sel = self.replay_game_choice.GetSelection()
+        if sel == wx.NOT_FOUND:
+            wx.MessageBox("ゲームを選択してください。", "エラー", wx.ICON_ERROR)
+            return
+        
+        game_info = self.match_last_results['results']['games'][sel]
+        
+        # UIを初期化
+        self.replay_board = chess.Board()
+        
+        # 手順データを取得（複数の形式に対応）
+        self.replay_moves = game_info.get('moves_uci', [])
+        if not self.replay_moves and 'pgn' in game_info:
+            # PGNから手順を復元
+            try:
+                game = chess.pgn.read_game(io.StringIO(game_info['pgn']))
+                self.replay_moves = [move.uci() for move in game.mainline_moves()]
+            except:
+                self.replay_moves = []
+        
+        self.replay_current_move = 0
+        
+        if not self.replay_moves:
+            wx.MessageBox("この対戦にはムーブデータがありません。\n別の対戦を試してください。", "情報", wx.ICON_INFORMATION)
+            return
+        
+        # ゲーム情報を保存（結果確認用）
+        self.replay_game_info = game_info
+        
+        # ボタンを有効化
+        self.replay_prev_btn.Enable(True)
+        self.replay_back_btn.Enable(True)
+        self.replay_forward_btn.Enable(True)
+        self.replay_last_btn.Enable(True)
+        
+        # 初期状態で表示
+        self._update_replay_display()
+    
+    def _on_replay_prev(self, event):
+        """再生を最初に戻す"""
+        self.replay_current_move = 0
+        self._update_replay_display()
+    
+    def _on_replay_back(self, event):
+        """1手戻す"""
+        if self.replay_current_move > 0:
+            self.replay_current_move -= 1
+        self._update_replay_display()
+    
+    def _on_replay_forward(self, event):
+        """1手進める"""
+        if self.replay_current_move < len(self.replay_moves):
+            self.replay_current_move += 1
+        self._update_replay_display()
+    
+    def _on_replay_last(self, event):
+        """再生を最後に"""
+        self.replay_current_move = len(self.replay_moves)
+        self._update_replay_display()
+    
+    def _update_replay_display(self):
+        """再生画面を更新"""
+        if self.replay_board is None:
+            return
+        
+        # ボードをリセット
+        self.replay_board = chess.Board()
+        
+        # 現在の手数まで進める
+        for i in range(self.replay_current_move):
+            if i < len(self.replay_moves):
+                try:
+                    move = chess.Move.from_uci(self.replay_moves[i])
+                    self.replay_board.push(move)
+                except:
+                    break
+        
+        # 手数表示を更新
+        self.replay_move_num.SetLabel(f"手数: {self.replay_current_move}/{len(self.replay_moves)}")
+        
+        # ボード描画
+        self._draw_replay_board()
+        
+        # PGN表示
+        pgn_text = self._generate_pgn_display()
+        
+        # ゲーム情報を表示
+        if hasattr(self, 'replay_game_info'):
+            game_info = self.replay_game_info
+            result = game_info.get('result', '不明')
+            meraki_color = "白" if game_info.get('meraki_white', True) else "黒"
+            stockfish_color = "黒" if game_info.get('meraki_white', True) else "白"
+            
+            # 結果を日本語で表示
+            if result == 'meraki_win':
+                result_text = f"✓ Meraki({meraki_color})の勝利！"
+            elif result == 'stockfish_win':
+                result_text = f"✗ Meraki({meraki_color})の敗北（Stockfish({stockfish_color})の勝利）"
+            else:
+                result_text = "= 引き分け"
+            
+            game_info_text = f"{result_text}\n\n{pgn_text}"
+        else:
+            game_info_text = pgn_text
+        
+        self.replay_pgn_ctrl.SetValue(game_info_text)
+    
+    def _draw_replay_board(self):
+        """再生用ボードを描画"""
+        dc = wx.ClientDC(self.replay_board_panel)
+        dc.SetBrush(wx.Brush(wx.Colour(50, 50, 50)))
+        dc.DrawRectangle(0, 0, SQUARE_SIZE * 8, SQUARE_SIZE * 8)
+        
+        for rank in range(8):
+            for file in range(8):
+                # ボード座標を反転（黒視点）
+                sq = chess.square(7 - file, rank)
+                
+                # 色
+                is_light = (file + rank) % 2 == 0
+                color = LIGHT_COLOR if is_light else DARK_COLOR
+                
+                # 最後の手のハイライト
+                if self.replay_current_move > 0 and self.replay_current_move <= len(self.replay_moves):
+                    last_move = chess.Move.from_uci(self.replay_moves[self.replay_current_move - 1])
+                    if sq in [last_move.from_square, last_move.to_square]:
+                        color = HIGHLIGHT_COLOR
+                
+                dc.SetBrush(wx.Brush(color))
+                dc.SetPen(wx.Pen(color))
+                dc.DrawRectangle(file * SQUARE_SIZE, rank * SQUARE_SIZE,
+                                SQUARE_SIZE, SQUARE_SIZE)
+                
+                # 駒の描画
+                piece = self.replay_board.piece_at(sq)
+                if piece:
+                    label = piece.symbol()
+                    dc.SetFont(wx.Font(28, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+                    dc.SetTextForeground(wx.BLACK if piece.color else wx.WHITE)
+                    dc.DrawText(label,
+                               file * SQUARE_SIZE + 16,
+                               rank * SQUARE_SIZE + 16)
+    
+    def _generate_pgn_display(self) -> str:
+        """PGN形式で棋譜を生成"""
+        pgn_lines = []
+        
+        for i, uci in enumerate(self.replay_moves, 1):
+            try:
+                move = chess.Move.from_uci(uci)
+                board_tmp = chess.Board()
+                
+                # i-1番目までの手を指す
+                for j in range(i - 1):
+                    board_tmp.push(chess.Move.from_uci(self.replay_moves[j]))
+                
+                # 移動前の局面でSAN記法に変換
+                san = board_tmp.san(move)
+                
+                # 手数表記
+                if (i - 1) % 2 == 0:  # 白の手
+                    if (i - 1) % 4 == 0:
+                        pgn_lines.append(f"{(i + 1) // 2}. {san}")
+                    else:
+                        pgn_lines[-1] += f" {san}"
+                else:  # 黒の手
+                    pgn_lines[-1] += f" {san}"
+            except:
+                pass
+        
+        pgn_text = " ".join(pgn_lines)
+        
+        # 現在の手を明示
+        if 0 < self.replay_current_move <= len(self.replay_moves):
+            try:
+                move = chess.Move.from_uci(self.replay_moves[self.replay_current_move - 1])
+                board_tmp = chess.Board()
+                for j in range(self.replay_current_move - 1):
+                    board_tmp.push(chess.Move.from_uci(self.replay_moves[j]))
+                san = board_tmp.san(move)
+                pgn_text = pgn_text.replace(san, f"→ {san} ←", 1)
+            except:
+                pass
+        
+        return pgn_text
+    
+    def _update_match_results_with_moves(self, results, stats):
+        """対戦結果をゲーム選択ドロップダウンに反映"""
+        self.match_last_results = {
+            'results': results,
+            'stats': stats,
+            'timestamp': datetime.now()
+        }
+        
+        # ゲーム選択ドロップダウンを更新
+        self.replay_game_choice.Clear()
+        for i, game in enumerate(results['games'], 1):
+            result_str = game['result'].replace('_', ' ')
+            label = f"ゲーム {i}: {result_str} ({game['moves']}手)"
+            self.replay_game_choice.Append(label)
+        
+        # 最初のゲームを選択
+        if results['games']:
+            self.replay_game_choice.SetSelection(0)
+    
+    def _find_and_verify_stockfish(self, provided_path: str) -> Optional[str]:
+        """
+        Stockfishを探して接続確認する。
+        複数の場所を試行し、最初に見つかったものを返す。
+        """
+        import shutil
+        import os
+        
+        # 試行するパスのリスト
+        paths_to_try = [
+            provided_path,  # ユーザー指定のパス
+            "stockfish",    # PATH環境変数
+            "stockfish.exe",
+            os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Stockfish", "stockfish.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Stockfish", "stockfish.exe"),
+            os.path.join(os.path.expanduser("~"), "AppData", "Local", "Stockfish", "stockfish.exe"),
+            os.path.join(os.path.expanduser("~"), "Stockfish", "stockfish.exe"),
+        ]
+        
+        # 重複を除去
+        paths_to_try = list(dict.fromkeys(paths_to_try))
+        
+        self.match_log_ctrl.AppendText("🔍 Stockfishを検索中...\n")
+        
+        for path in paths_to_try:
+            try:
+                # PATHから探す場合
+                if path in ["stockfish", "stockfish.exe"]:
+                    full_path = shutil.which(path)
+                    if full_path is None:
+                        continue
+                    path = full_path
+                
+                # ファイルが存在するか確認
+                if not os.path.isfile(path):
+                    continue
+                
+                # 接続テスト
+                try:
+                    import chess.engine
+                    test_engine = chess.engine.SimpleEngine.popen_uci(path)
+                    test_engine.quit()
+                    self.match_log_ctrl.AppendText(f"✓ Stockfish検出: {path}\n")
+                    return path
+                except Exception as e:
+                    continue
+            except Exception:
+                continue
+        
+        # 全て失敗
+        self.match_log_ctrl.AppendText("✗ Stockfishが見つかりません\n")
+        error_msg = """Stockfishが見つかりません。以下のいずれかを実施してください：
+
+【方法1】 Stockfishをインストール
+- https://stockfishchess.org/download/ からダウンロード
+- インストール後、自動検出されます
+
+【方法2】 インストール済みの場合はパスを指定
+1. Stockfishのインストール先を確認
+2. 下記のように絶対パスを入力してください：
+   例: C:\\Program Files\\Stockfish\\stockfish.exe
+   
+【方法3】 PATH環境変数に登録
+- StockfishのあるフォルダをPATHに追加
+"""
+        wx.MessageBox(error_msg, "Stockfishが見つかりません", wx.ICON_ERROR)
+        return None
 
     # ========== 人間の手を処理 ==========
     def push_move(self, move: chess.Move):
@@ -930,9 +1468,12 @@ Stockfish勝利: {results['stockfish_wins']}
         if self.board.is_game_over():
             return
 
+        # 現在のAI深さ設定を読み込む
+        ai_depth = self.game_ai_depth_ctrl.GetValue()
+        
         mv_uci = find_best_move(
             self.board,
-            depth=5,
+            depth=ai_depth,
             time_ms=1500,
             coeff_path=None,
             ml_alpha=0.3,

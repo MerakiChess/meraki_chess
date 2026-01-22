@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Meraki Chess GUI",
+			"type": "shell",
+			"command": "${command:python.interpreterPath}",
+			"args": [
+				"chess_engine/gui/wxgui.pyw"
+			],
+			"isBackground": true,
+			"group": "none"
+		}
+	]
+}
