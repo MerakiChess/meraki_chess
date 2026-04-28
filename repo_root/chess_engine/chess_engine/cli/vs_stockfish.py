@@ -48,7 +48,8 @@ class EngineMatch:
                  meraki_time_ms: int = 1500,
                  stockfish_depth: int = 15,
                  stockfish_time_ms: int = 1000,
-                 stockfish_skill_level: int = 20):
+                 stockfish_skill_level: int = 20,
+                 opening_book: Optional[str] = None):
         """
         Args:
             engine_path: Stockfishの実行ファイルパス
@@ -63,6 +64,7 @@ class EngineMatch:
         self.stockfish_depth = stockfish_depth
         self.stockfish_time_ms = stockfish_time_ms
         self.stockfish_skill_level = max(0, min(20, stockfish_skill_level))  # 0-20に制限
+        self.opening_book = opening_book
         
         # Stockfishのエンジンを初期化
         if engine_path is None:
@@ -84,6 +86,7 @@ class EngineMatch:
                 time_ms=self.meraki_time_ms,
                 coeff_path=None,
                 ml_alpha=0.0,  # ヒューリスティック評価のみ使用
+                opening_book=self.opening_book,
             )
             if uci is None:
                 return None

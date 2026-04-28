@@ -6,6 +6,7 @@ from ..eval.ml_bridge import evaluate_board_with_ml
 from .move_order import MoveOrderer
 from .time_manager import TimeManager
 from .tt import TranspositionTable, TTEntry, EXACT, LOWERBOUND, UPPERBOUND
+from .opening_book import OpeningBook
 
 def _non_pawn_material(b: chess.Board) -> int:
     vals = {chess.KNIGHT: 320, chess.BISHOP: 330, chess.ROOK: 500, chess.QUEEN: 900}
@@ -16,7 +17,8 @@ def _is_endgame(b: chess.Board) -> bool:
 
 class Searcher:
     """反復深化 + αβ + TT + LMR + ヌルムーブ + 静止探索"""
-    def __init__(self, coeff_path: Optional[str] = None, ml_alpha: float = 0.35) -> None:
+    def __init__(self, coeff_path: Optional[str] = None, ml_alpha: float = 0.35,
+                 opening_book: Optional[OpeningBook] = None) -> None:
         self.tt = TranspositionTable()
         self.mo = MoveOrderer()
         self.tm = TimeManager()
@@ -24,6 +26,7 @@ class Searcher:
         self.nodes = 0
         self.coeff_path = coeff_path
         self.ml_alpha = ml_alpha
+        self.opening_book = opening_book
 
     def evaluate(self, b: chess.Board) -> int:
         if self.coeff_path:
@@ -133,6 +136,16 @@ class Searcher:
         self.tm.start(time_ms)
         self.nodes = 0
         self.iter += 1
+        # Check opening book before doing any search
+        try:
+            if self.opening_book:
+                book_uci = self.opening_book.get(b)
+                if book_uci:
+                    mv = chess.Move.from_uci(book_uci)
+                    if mv in b.legal_moves:
+                        return mv
+        except Exception:
+            pass
         best = None
         last = self.evaluate(b)
         window = 50
@@ -164,10 +177,21 @@ class Searcher:
         return best or chess.Move.null()
 
 def find_best_move(fen_or_board: Union[str, chess.Board], depth: int = 6, time_ms: Optional[int] = 2000,
-                   coeff_path: Optional[str] = None, ml_alpha: float = 0.35) -> Optional[str]:
+                   coeff_path: Optional[str] = None, ml_alpha: float = 0.35,
+                   opening_book: Optional[Union[str, OpeningBook]] = None) -> Optional[str]:
     b = fen_or_board if isinstance(fen_or_board, chess.Board) else chess.Board(fen_or_board)
     if b.is_game_over():
         return None
-    s = Searcher(coeff_path=coeff_path, ml_alpha=ml_alpha)
+    ob = None
+    if isinstance(opening_book, OpeningBook):
+        ob = opening_book
+    elif isinstance(opening_book, str) and opening_book:
+        # treat as path to polyglot or json book
+        from .opening_book import OpeningBook as _OB
+
+        # try polyglot first, fallback json
+        ob = _OB(polyglot_path=opening_book, json_path=opening_book)
+
+    s = Searcher(coeff_path=coeff_path, ml_alpha=ml_alpha, opening_book=ob)
     m = s.search(b, depth, time_ms)
     return m.uci() if m and m != chess.Move.null() else None

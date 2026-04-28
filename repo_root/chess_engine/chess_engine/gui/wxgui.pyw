@@ -22,6 +22,10 @@ from chess_engine.eval.ml_bridge import evaluate_board_with_ml
 from chess_engine.eval.heuristic import evaluate_board as eval_hc
 from chess_engine.cli.vs_stockfish import EngineMatch
 
+# デフォルトのオープニングブック（JSON または polyglot .bin のパス）
+DEFAULT_OPENING_BOOK = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'openings.json'))
+
+# GPUサポート（オプション）
 try:
     import pynvml # type: ignore
     _HAVE_NVML = True
@@ -561,6 +565,7 @@ class MainFrame(wx.Frame):
                             time_ms=5000,  # 最大5秒
                             coeff_path=None,
                             ml_alpha=0.0,
+                            opening_book=DEFAULT_OPENING_BOOK,
                         )
                         
                         elapsed = time.perf_counter() - t_start
@@ -921,6 +926,7 @@ class MainFrame(wx.Frame):
                         stockfish_depth=stockfish_depth,
                         stockfish_time_ms=1000,
                         stockfish_skill_level=self.match_sf_skill_ctrl.GetValue(),
+                            opening_book=DEFAULT_OPENING_BOOK,
                     )
                     
                     game_results = self.match.play_matches(num_matches=1)
@@ -1257,10 +1263,10 @@ Stockfish勝利: {results['stockfish_wins']}
         
         for rank in range(8):
             for file in range(8):
-                # ボード座標を反転（黒視点）
-                sq = chess.square(7 - file, rank)
-                
-                # 色
+                # ボード座標は白が下になる通常の向きにする
+                sq = chess.square(file, 7 - rank)
+
+                # 色（白マス/黒マスの通常割り当て）
                 is_light = (file + rank) % 2 == 0
                 color = LIGHT_COLOR if is_light else DARK_COLOR
                 
@@ -1455,6 +1461,7 @@ Stockfish勝利: {results['stockfish_wins']}
             time_ms=1500,
             coeff_path=None,
             ml_alpha=0.3,
+            opening_book=DEFAULT_OPENING_BOOK,
         )
         if mv_uci is None:
             return
