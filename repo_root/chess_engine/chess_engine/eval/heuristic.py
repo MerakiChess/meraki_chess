@@ -2,8 +2,7 @@ from __future__ import annotations
 from typing import Dict
 import chess
 
-# Piece values (centipawns)
-PIECE_VALUES: Dict[int, int] = {
+PIECE_VALUES = {
     chess.PAWN: 100,
     chess.KNIGHT: 320,
     chess.BISHOP: 330,
@@ -12,76 +11,37 @@ PIECE_VALUES: Dict[int, int] = {
     chess.KING: 0,
 }
 
-# Mobility and attack weights
-K_MOB: float = 0.05
-K_ATT: float = 0.10
+K_MOB = 0.05
+K_ATT = 0.10
 
+PSQT_PAWN = [0,0,0,0,0,0,0,0, 50,50,50,50,50,50,50,50, 10,10,20,30,30,20,10,10, 5,5,10,25,25,10,5,0, 0,0,0,20,20,0,0,0, 5,-5,-10,0,0,-10,-5,5, 5,10,10,-20,-20,10,10,5, 0,0,0,0,0,0,0,0]
 
-def attack_score(board: chess.Board) -> int:
-    occupied_white = board.occupied_co[chess.WHITE]
-    occupied_black = board.occupied_co[chess.BLACK]
+PSQT_KNIGHT = [-50,-40,-30,-30,-30,-30,-40,-50, -40,-20,0,0,0,0,-20,-40, -30,0,10,15,15,10,0,-30, -30,5,15,20,20,15,5,-30, -30,0,15,20,20,15,0,-30, -30,5,10,15,15,10,5,-30, -40,-20,0,5,5,0,-20,-40, -50,-40,-30,-30,-30,-30,-40,-50]
 
-    # SquareSet を最初に作る
-    attacked_black = chess.SquareSet()
-    attacked_white = chess.SquareSet()
+PSQT_BISHOP = [-20,-10,-10,-10,-10,-10,-10,-20, -10,0,0,0,0,0,0,-10, -10,0,5,10,10,5,0,-10, -10,5,5,10,10,5,5,-10, -10,0,10,10,10,10,0,-10, -10,10,10,10,10,10,10,-10, -10,5,0,0,0,0,5,-10, -20,-10,-10,-10,-10,-10,-10,-20]
 
-    # 白 → 黒
-    for sq in chess.SquareSet(occupied_white):
-        attacked_black |= board.attacks(sq) & chess.SquareSet(occupied_black)
+PSQT_ROOK = [0,0,0,0,0,0,0,0, 5,10,10,10,10,10,10,5, -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5, -5,0,0,0,0,0,0,-5, 0,10,10,10,10,10,10,0]
 
-    # 黒 → 白
-    for sq in chess.SquareSet(occupied_black):
-        attacked_white |= board.attacks(sq) & chess.SquareSet(occupied_white)
+PSQT_QUEEN = [-20,-10,-10,-5,-5,-10,-10,-20, -10,0,0,0,0,0,0,-10, -10,0,5,5,5,5,0,-10, 0,0,5,5,5,5,0,-5, -5,0,5,5,5,5,0,-5, -10,0,5,5,5,5,0,-10, -10,0,0,0,0,0,0,-10, -20,-10,-10,-5,-5,-10,-10,-20]
 
-    white_attack = len(attacked_black)
-    black_attack = len(attacked_white)
+PSQT_KING = [-30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30, -20,-30,-30,-40,-40,-30,-30,-20, -10,-20,-20,-20,-20,-20,-20,-10, 20,20,0,0,0,0,20,20, 20,30,10,0,0,10,30,20]
 
-    return white_attack - black_attack
-
-
-
-def mobility_score(board: chess.Board) -> int:
-    """Return (white_legal_moves - black_legal_moves).
-
-    board を直接書き換えないよう、手番を変えるときは
-    copy(stack=False) でコピーしてから turn をいじる。
-    """
-    # White の合法手数
-    if board.turn == chess.WHITE:
-        b_white = board
-        b_black = board.copy(stack=False)
-        b_black.turn = chess.BLACK
-    else:
-        b_white = board.copy(stack=False)
-        b_white.turn = chess.WHITE
-        b_black = board
-
-    white_moves = b_white.legal_moves.count()
-    black_moves = b_black.legal_moves.count()
-    return white_moves - black_moves
-
-# Minimal PSQT (middlegame) for illustration. 64-length lists per piece.
-# why: keep simple & deterministic; not tuned.
-PSQT_ZERO = [0] * 64
-
-PSQT: Dict[int, list[int]] = {
-    chess.PAWN: PSQT_ZERO,
-    chess.KNIGHT: PSQT_ZERO,
-    chess.BISHOP: PSQT_ZERO,
-    chess.ROOK: PSQT_ZERO,
-    chess.QUEEN: PSQT_ZERO,
-    chess.KING: PSQT_ZERO,
+PSQT = {
+    chess.PAWN: PSQT_PAWN,
+    chess.KNIGHT: PSQT_KNIGHT,
+    chess.BISHOP: PSQT_BISHOP,
+    chess.ROOK: PSQT_ROOK,
+    chess.QUEEN: PSQT_QUEEN,
+    chess.KING: PSQT_KING,
 }
 
-
-def _material(board: chess.Board) -> int:
+def _material(board):
     score = 0
     for pt, v in PIECE_VALUES.items():
         score += v * (len(board.pieces(pt, chess.WHITE)) - len(board.pieces(pt, chess.BLACK)))
     return score
 
-
-def _psqt(board: chess.Board) -> int:
+def _psqt(board):
     s = 0
     for pt, table in PSQT.items():
         for sq in board.pieces(pt, chess.WHITE):
@@ -90,34 +50,69 @@ def _psqt(board: chess.Board) -> int:
             s -= table[chess.square_mirror(sq)]
     return s
 
+def attack_score(board):
+    occupied_white = board.occupied_co[chess.WHITE]
+    occupied_black = board.occupied_co[chess.BLACK]
+    attacked_black = chess.SquareSet()
+    attacked_white = chess.SquareSet()
+    for sq in chess.SquareSet(occupied_white):
+        attacked_black |= board.attacks(sq) & chess.SquareSet(occupied_black)
+    for sq in chess.SquareSet(occupied_black):
+        attacked_white |= board.attacks(sq) & chess.SquareSet(occupied_white)
+    return len(attacked_black) - len(attacked_white)
 
-def evaluate_board(board: chess.Board) -> int:
-    """Centipawn evaluation from White's POV.
+def mobility_score(board):
+    if board.turn == chess.WHITE:
+        b_white = board
+        b_black = board.copy(stack=False)
+        b_black.turn = chess.BLACK
+    else:
+        b_white = board.copy(stack=False)
+        b_white.turn = chess.WHITE
+        b_black = board
+    return b_white.legal_moves.count() - b_black.legal_moves.count()
 
-    ベースは「素材 + PSQT（White - Black）」。
-    そこに、
-    - モビリティ（合法手数の差）
-    - 攻撃スコア（敵駒に利きをかけているマスの差）
-    を小さい係数で足して、「前に出る」「動ける」手をほんの少し優遇する。
-    """
+def king_tropism(board, king_sq, piece_type):
+    enemies = board.pieces(piece_type, not board.piece_at(king_sq).color)
+    return sum(20 // (chess.square_distance(king_sq, sq) + 1) for sq in enemies)
+
+def pawn_passed(board, sq):
+    file = chess.square_file(sq)
+    color = board.piece_at(sq).color
+    direction = 8 if color else -8
+    for rank_offset in range(1, 7):
+        test_sq = sq + rank_offset * direction
+        if board.pieces(chess.PAWN, not color).contains(test_sq):
+            return False
+    return True
+
+def passed_pawn_bonus(board):
+    score = 0
+    for sq in board.pieces(chess.PAWN, chess.WHITE):
+        rank = chess.square_rank(sq)
+        if pawn_passed(board, sq):
+            score += 20 * rank
+    for sq in board.pieces(chess.PAWN, chess.BLACK):
+        rank = 7 - chess.square_rank(sq)
+        if pawn_passed(board, sq):
+            score -= 20 * rank
+    return score
+
+def evaluate_board(board):
     if board.is_checkmate():
-        # Near-mate scores are handled in search using ply.
-        return -100_000
-    if (
-        board.is_stalemate()
-        or board.is_repetition(2)
-        or board.is_insufficient_material()
-        or board.is_fifty_moves()
-    ):
+        return -100000
+    if board.is_game_over():
         return 0
-
-    # もともとの評価（White - Black）
     score = _material(board) + _psqt(board)
-
-    # アクティビティ項（White - Black）
     mob = mobility_score(board)
     att = attack_score(board)
-    score += int(round(K_MOB * mob + K_ATT * att))
-
-    # 返り値は「手番側から見た評価」にする
+    score += int(K_MOB * mob + K_ATT * att)
+    score += passed_pawn_bonus(board)
+    wk = board.king(chess.WHITE)
+    bk = board.king(chess.BLACK)
+    if wk is not None:
+        score += king_tropism(board, wk, chess.KNIGHT) + king_tropism(board, wk, chess.BISHOP)
+    if bk is not None:
+        score -= king_tropism(board, bk, chess.KNIGHT) + king_tropism(board, bk, chess.BISHOP)
     return score if board.turn == chess.WHITE else -score
+

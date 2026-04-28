@@ -1,0 +1,7 @@
+timestamp,game_num,total_games,result,meraki_white,moves,time_sec
+2026-04-21 12:09:39,1,5,draw,Yes,0,0.0
+2026-04-21 12:09:39,2,5,draw,Yes,0,0.0
+2026-04-21 12:09:39,3,5,draw,Yes,0,0.0
+2026-04-21 12:09:39,4,5,draw,Yes,0,0.0
+2026-04-21 12:09:39,5,5,draw,Yes,0,0.0
+2026-04-21 12:09:39,[統計],5,勝率: 50.0%,Win: 0,Loss: 0,Draw: 5

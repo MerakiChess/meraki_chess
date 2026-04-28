@@ -22,9 +22,8 @@ from chess_engine.eval.ml_bridge import evaluate_board_with_ml
 from chess_engine.eval.heuristic import evaluate_board as eval_hc
 from chess_engine.cli.vs_stockfish import EngineMatch
 
-# GPUサポート（オプション）
 try:
-    import pynvml
+    import pynvml # type: ignore
     _HAVE_NVML = True
 except Exception:
     _HAVE_NVML = False
@@ -235,8 +234,8 @@ class MainFrame(wx.Frame):
         hbox.Add(new_game_btn, flag=wx.LEFT, border=5)
         
         # AI深さ設定
-        hbox.Add(wx.StaticText(panel, label="AI深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 15)
-        self.game_ai_depth_ctrl = wx.SpinCtrl(panel, initial=5, min=1, max=20)
+        hbox.Add(wx.StaticText(panel, label="Meraki強さ (深さ):"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 15)
+        self.game_ai_depth_ctrl = wx.SpinCtrl(panel, initial=18, min=1, max=30)
         hbox.Add(self.game_ai_depth_ctrl, 0, wx.LEFT, 5)
 
         vbox.Add(hbox, flag=wx.EXPAND | wx.ALL, border=5)
@@ -334,8 +333,8 @@ class MainFrame(wx.Frame):
         self.match_games_ctrl = wx.SpinCtrl(panel, initial=5, min=1, max=100)
         config_sizer.Add(self.match_games_ctrl, 0, wx.ALL, 5)
         
-        config_sizer.Add(wx.StaticText(panel, label="Meraki深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        self.match_meraki_depth_ctrl = wx.SpinCtrl(panel, initial=5, min=1, max=20)
+        config_sizer.Add(wx.StaticText(panel, label="Meraki強さ (深さ):"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        self.match_meraki_depth_ctrl = wx.SpinCtrl(panel, initial=18, min=1, max=30)
         config_sizer.Add(self.match_meraki_depth_ctrl, 0, wx.ALL, 5)
         
         config_sizer.Add(wx.StaticText(panel, label="Stockfish深さ:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
@@ -706,38 +705,17 @@ class MainFrame(wx.Frame):
         self.monitor_canvas.draw()
 
     def _calculate_equilibrium_point(self, depths, elapsed_avg, rss_avg, cpu_avg):
-        """均衡点を計算する"""
-        if len(depths) < 3:
-            return None  # 少なくとも3つの深さが必要
+        """均衡点を計算する - CPU使用率、メモリ使用率、実行時間の和が最小となる点"""
+        if not depths:
+            return None
 
-        # 各メトリックの増分コストを計算
-        elapsed_increments = [elapsed_avg[i+1] - elapsed_avg[i] for i in range(len(elapsed_avg)-1)]
-        rss_increments = [rss_avg[i+1] - rss_avg[i] for i in range(len(rss_avg)-1)]
-        cpu_increments = [cpu_avg[i+1] - cpu_avg[i] for i in range(len(cpu_avg)-1)]
+        # 各深さでの和を計算
+        sums = [elapsed_avg[i] + rss_avg[i] + cpu_avg[i] for i in range(len(depths))]
 
-        # 各メトリックの平均増分コスト
-        avg_elapsed_inc = sum(elapsed_increments) / len(elapsed_increments)
-        avg_rss_inc = sum(rss_increments) / len(rss_increments)
-        avg_cpu_inc = sum(cpu_increments) / len(cpu_increments)
+        # 和が最小となるインデックスを見つける
+        min_sum_index = sums.index(min(sums))
 
-        # 各深さで、増分コストが平均を超えるかどうかをチェック（少なくとも2つのメトリック）
-        # 深さが最大になるように、最後の均衡点を見つける
-        equilibrium_index = None
-        for i in range(len(elapsed_increments)):
-            count_exceed = 0
-            if elapsed_increments[i] < avg_elapsed_inc:
-                count_exceed += 1
-            if rss_increments[i] < avg_rss_inc:
-                count_exceed += 1
-            if cpu_increments[i] < avg_cpu_inc:
-                count_exceed += 1
-            if count_exceed >= 2:  # 少なくとも2つのメトリックで平均を超える
-                equilibrium_index = i
-
-        if equilibrium_index is not None:
-            return depths[equilibrium_index + 1]  # 次の深さが均衡点
-
-        return None  # 均衡点が見つからない
+        return depths[min_sum_index]
 
     def _update_depth_graph(self):
         """深さベースのグラフを更新"""

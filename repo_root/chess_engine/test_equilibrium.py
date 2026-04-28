@@ -12,7 +12,7 @@ def test_equilibrium_calculation():
     frame = MainFrame.__new__(MainFrame)  # Create instance without calling __init__
 
     # Test data: depths and average metrics
-    depths = [1, 2, 3, 4, 5,6,7,8,9,10]
+    depths = [1, 2, 3, 4, 5]
     elapsed_avg = [0.1, 0.3, 0.8, 2.5, 8.0]  # Execution times
     rss_avg = [1.0, 2.5, 4.0, 7.0, 15.0]     # Memory deltas
     cpu_avg = [10.0, 25.0, 45.0, 80.0, 95.0] # CPU usage
@@ -27,9 +27,14 @@ def test_equilibrium_calculation():
     print(f"CPU usage: {cpu_avg}")
     print(f"\nCalculated Equilibrium Point: {equilibrium}")
 
-    # Expected: Should find equilibrium at depth 5 (where increments exceed averages for at least 2 metrics)
-    # Depth 4->5: elapsed 8.0-2.5=5.5 > avg~1.975, rss 15-7=8 > avg~3.5, cpu 95-80=15 < avg~21.25 (2 metrics exceed)
-    expected = 5
+    # Calculate sums for each depth
+    sums = [elapsed_avg[i] + rss_avg[i] + cpu_avg[i] for i in range(len(depths))]
+    print(f"Sums: {sums}")
+
+    # Expected: Depth with minimum sum
+    min_sum_index = sums.index(min(sums))
+    expected = depths[min_sum_index]
+    print(f"Expected (min sum at depth): {expected}")
     if equilibrium == expected:
         print("✓ Equilibrium calculation PASSED")
         return True

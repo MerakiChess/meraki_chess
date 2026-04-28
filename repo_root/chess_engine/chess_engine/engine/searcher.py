@@ -55,10 +55,8 @@ class Searcher:
             return 0
         if depth <= 0:
             return self.quiescence(b, alpha, beta, ply)
-        if b.is_checkmate():
-            return -100_000 + ply
-        if b.is_repetition(2) or b.is_fifty_moves() or b.is_insufficient_material():
-            return 0
+        if b.is_game_over():
+            return -100_000 + ply if b.is_checkmate() else 0
 
         self.nodes += 1
 
@@ -94,19 +92,20 @@ class Searcher:
         best_move = None
         raised = False
 
+        # PVS: first move full window, rest zero window re-search
+        first_move = True
         for i, m in enumerate(self.mo.order(b, legal, tt_move, ply)):
-            color_before_push = int(b.turn)  # 履歴キー用に保存（push前）
+            color_before_push = int(b.turn)
             b.push(m)
             nd = depth - 1
 
-            # LMR
-            if i > 3 and not in_check and not b.is_capture(m) and not b.gives_check(m) and depth >= 3:
-                red = 1 + (i // 8)
-                sc = -self.negamax(b, nd - red, -alpha - 1, -alpha, ply + 1)
-                if sc > alpha:
-                    sc = -self.negamax(b, nd, -beta, -alpha, ply + 1)
-            else:
+            if first_move:
+                first_move = False
                 sc = -self.negamax(b, nd, -beta, -alpha, ply + 1)
+            else:
+                sc = -self.negamax(b, nd, -alpha - 1, -alpha, ply + 1)
+                if sc > alpha and sc < beta:
+                    sc = -self.negamax(b, nd, -beta, -alpha, ply + 1)
 
             b.pop()
 
@@ -118,7 +117,6 @@ class Searcher:
                     raised = True
                     if alpha >= beta:
                         if not b.is_capture(m):
-                            # 直接代入せずAPIを使う（可変リスト前提）
                             self.mo.note_killer(ply, m)
                             self.mo.bump_history(color_before_push, m.to_square, depth)
                         break

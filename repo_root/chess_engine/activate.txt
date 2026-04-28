@@ -1,1 +1,0 @@
-python chess_engine/gui/wxgui.pyw
