@@ -36,7 +36,10 @@ python -c "from chess_engine.io.uci import run_uci; run_uci()"
 ` 別ウィンドウ/GUIから "position startpos" → "go" → "bestmove ..." を確認 `
 `
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 
 #仮想環境マニュアル
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
