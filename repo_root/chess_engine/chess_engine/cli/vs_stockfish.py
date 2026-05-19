@@ -92,7 +92,9 @@ class EngineMatch:
                 return None
             return chess.Move.from_uci(uci)
         except Exception as e:
+            import traceback
             print(f"Merakiエンジンエラー: {e}")
+            traceback.print_exc()
             return None
     
     def play_move_stockfish(self, board: chess.Board) -> Optional[chess.Move]:
@@ -142,7 +144,10 @@ class EngineMatch:
             uci_history.append(move.uci())
         
         elapsed = time.perf_counter() - start_time
-        result = board.result()
+        if board.is_game_over():
+            result = board.result()
+        else:
+            result = "*"
         
         return result, uci_history, elapsed
     
@@ -159,6 +164,7 @@ class EngineMatch:
             "meraki_wins": 0,
             "stockfish_wins": 0,
             "draws": 0,
+            "errors": 0,
             "total_games": 0,
             "games": [],
             "total_time_sec": 0.0,
@@ -194,8 +200,10 @@ class EngineMatch:
                     results["stockfish_wins"] += 1
                 else:
                     results["meraki_wins"] += 1
-            else:  # 引き分け
+            elif result == "1/2-1/2":  # 引き分け
                 results["draws"] += 1
+            else:  # 対局不成立またはエラー
+                results["errors"] += 1
             
             print(f"結果: {result}")
         
@@ -253,7 +261,7 @@ class EngineMatch:
         
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=[
-                "game_num", "result", "meraki_white", "moves", "time_sec"
+                "game_num", "result", "meraki_white", "moves", "time_sec", "moves_uci"
             ])
             writer.writeheader()
             writer.writerows(results["games"])
@@ -312,6 +320,8 @@ def run_quick_match(num_games: int = 5, stockfish_path: Optional[str] = None):
         print(f"Meraki勝利: {results['meraki_wins']}")
         print(f"Stockfish勝利: {results['stockfish_wins']}")
         print(f"引き分け: {results['draws']}")
+        if results.get('errors', 0) > 0:
+            print(f"エラー: {results['errors']}")
         print(f"\nMerakiの勝率: {stats['meraki_win_rate']:.1f}%")
         print(f"Merakiのスコア: {stats['meraki_score']:.1f}/{results['total_games']}")
         print(f"平均ゲーム長: {stats['avg_game_length']:.1f} 手")

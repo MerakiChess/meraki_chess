@@ -1,0 +1,2 @@
+game_num,result,meraki_white,moves,time_sec,moves_uci
+1,0-1,True,24,20.054407099960372,"['e2e4', 'e7e5', 'g1f3', 'b8c6', 'h1g1', 'g8f6', 'f3g5', 'h7h6', 'g5h7', 'h8h7', 'f1e2', 'd7d5', 'e2a6', 'b7a6', 'g1h1', 'f6e4', 'a2a3', 'd8h4', 'g2g3', 'e4g3', 'h1g1', 'h4e4', 'd1e2', 'e4e2']"

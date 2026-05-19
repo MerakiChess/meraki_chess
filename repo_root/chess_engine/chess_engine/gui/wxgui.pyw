@@ -900,6 +900,7 @@ class MainFrame(wx.Frame):
                 'meraki_wins': 0,
                 'stockfish_wins': 0,
                 'draws': 0,
+                'errors': 0,
                 'games': []
             }
             
@@ -940,8 +941,10 @@ class MainFrame(wx.Frame):
                     elif raw_result == "0-1":
                         # 黒（0）が勝利
                         result_str = 'stockfish_win' if game_info['meraki_white'] else 'meraki_win'
-                    else:
+                    elif raw_result == "1/2-1/2":
                         result_str = 'draw'
+                    else:
+                        result_str = 'error'
                     
                     game_info['result'] = result_str
                     
@@ -951,8 +954,10 @@ class MainFrame(wx.Frame):
                         results['meraki_wins'] += 1
                     elif game_info['result'] == 'stockfish_win':
                         results['stockfish_wins'] += 1
-                    else:
+                    elif game_info['result'] == 'draw':
                         results['draws'] += 1
+                    else:
+                        results['errors'] += 1
                     
                     meraki_color = "白" if game_info['meraki_white'] else "黒"
                     wx.CallAfter(
@@ -1027,12 +1032,14 @@ class MainFrame(wx.Frame):
         self.match_log_ctrl.AppendText(f"\n=== 対戦完了 ===\n")
         self.match_log_ctrl.AppendText(f"総ゲーム数: {results['total_games']}\n")
         
+        error_count = results.get('errors', 0)
+        error_line = f"エラー数: {error_count}\n" if error_count > 0 else ""
         result_text = f"""=== 統計情報 ===
 総ゲーム数: {results['total_games']}
 Meraki勝利: {results['meraki_wins']}
 Stockfish勝利: {results['stockfish_wins']}
 引き分け: {results['draws']}
-
+{error_line}
 === 詳細統計 ===
 勝率: {stats['meraki_win_rate']:.1f}%
 スコア: {stats['meraki_score']:.1f}/{results['total_games']}

@@ -82,7 +82,9 @@ def pawn_passed(board, sq):
     direction = 8 if color else -8
     for rank_offset in range(1, 7):
         test_sq = sq + rank_offset * direction
-        if board.pieces(chess.PAWN, not color).contains(test_sq):
+        if test_sq not in chess.SQUARES:
+            break
+        if test_sq in board.pieces(chess.PAWN, not color):
             return False
     return True
 
