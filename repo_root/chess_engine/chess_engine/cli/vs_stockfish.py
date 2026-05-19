@@ -254,7 +254,7 @@ class EngineMatch:
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=[
                 "game_num", "result", "meraki_white", "moves", "time_sec"
-            ])
+            ], extrasaction='ignore')
             writer.writeheader()
             writer.writerows(results["games"])
         

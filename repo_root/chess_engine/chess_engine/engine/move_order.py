@@ -6,8 +6,9 @@ class MoveOrderer:
     def __init__(self, max_ply: int = 256) -> None:
         # 可変リスト（代入可能）
         self.killers: List[List[Optional[chess.Move]]] = [[None, None] for _ in range(max_ply)]
-        # 履歴ヒューリスティック（color,to_square）→ score
-        self.history: Dict[Tuple[int, int], int] = {}
+        # 履歴ヒューリスティック（color,from_square,to_square）→ score
+        self.history: Dict[Tuple[int, int, int], int] = {}
+
 
     def note_killer(self, ply: int, move: chess.Move) -> None:
         """βカット発生時の非キャプチャ手をキラーとして記録。"""
@@ -40,10 +41,18 @@ class MoveOrderer:
                 s += 10_000_000
             if b.is_capture(m):
                 s += 1_000_000 + self.mvv_lva(b, m)
+            else:
+                # 強めにチェック/昇格を優先（PVS/LMR前提で探索効率を上げる）
+                if m.promotion is not None:
+                    s += 900_000
+                if b.gives_check(m):
+                    s += 300_000
+
             if killers[0] and m == killers[0]:
                 s += 100_000
             if killers[1] and m == killers[1]:
                 s += 90_000
-            s += self.history.get((int(b.turn), m.to_square), 0)
+            # history: (side_to_move, from_square, to_square)
+            s += self.history.get((int(b.turn), m.from_square, m.to_square), 0)
             return s
         return sorted(moves, key=score, reverse=True)
