@@ -17,8 +17,14 @@ def _is_endgame(b: chess.Board) -> bool:
 
 class Searcher:
     """反復深化 + αβ + TT + LMR + ヌルムーブ + 静止探索"""
-    def __init__(self, coeff_path: Optional[str] = None, ml_alpha: float = 0.35,
-                 opening_book: Optional[OpeningBook] = None) -> None:
+
+    def __init__(
+        self,
+        coeff_path: Optional[str] = None,
+        ml_alpha: float = 0.35,
+        opening_book: Optional[OpeningBook] = None,
+        enable_null_move: bool = True,
+    ) -> None:
         self.tt = TranspositionTable()
         self.mo = MoveOrderer()
         self.tm = TimeManager()
@@ -27,6 +33,8 @@ class Searcher:
         self.coeff_path = coeff_path
         self.ml_alpha = ml_alpha
         self.opening_book = opening_book
+        self.enable_null_move = enable_null_move
+
 
     def evaluate(self, b: chess.Board) -> int:
         if self.coeff_path:
@@ -79,13 +87,20 @@ class Searcher:
         in_check = b.is_check()
 
         # Null-move pruning
-        if not in_check and depth >= 3 and b.legal_moves.count() > 0 and not _is_endgame(b):
+        if (
+            self.enable_null_move
+            and not in_check
+            and depth >= 3
+            and b.legal_moves.count() > 0
+            and not _is_endgame(b)
+        ):
             b.push(chess.Move.null())
             r = 2 + (depth // 4)
             sc = -self.negamax(b, depth - 1 - r, -beta, -beta + 1, ply + 1)
             b.pop()
             if sc >= beta:
                 return beta
+
 
         legal = list(b.legal_moves)
         if not legal:
@@ -192,6 +207,7 @@ def find_best_move(fen_or_board: Union[str, chess.Board], depth: int = 6, time_m
         # try polyglot first, fallback json
         ob = _OB(polyglot_path=opening_book, json_path=opening_book)
 
-    s = Searcher(coeff_path=coeff_path, ml_alpha=ml_alpha, opening_book=ob)
+    s = Searcher(coeff_path=coeff_path, ml_alpha=ml_alpha, opening_book=ob, enable_null_move=False)
+
     m = s.search(b, depth, time_ms)
     return m.uci() if m and m != chess.Move.null() else None

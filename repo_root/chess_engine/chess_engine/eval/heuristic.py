@@ -11,8 +11,22 @@ PIECE_VALUES = {
     chess.KING: 0,
 }
 
-K_MOB = 0.05
-K_ATT = 0.10
+# フェーズ（簡易）
+# 盤上の非ポーン駒数から「序盤/終盤」を推定する
+ENDGAME_NON_PAWN_PIECES = 7
+
+# 攻め寄りにするための基本係数（後でフェーズで上書き）
+K_MOB = 0.07
+K_ATT = 0.13
+
+# 終盤はポーン推進・ビショップ/ポーン連動を強め、過度なモビリティを抑える
+K_MOB_END = 0.04
+K_ATT_END = 0.08
+
+# passed pawn の係数（フェーズで切替）
+PASSED_PAWN_K = 26
+PASSED_PAWN_K_END = 40
+
 
 PSQT_PAWN = [0,0,0,0,0,0,0,0, 50,50,50,50,50,50,50,50, 10,10,20,30,30,20,10,10, 5,5,10,25,25,10,5,0, 0,0,0,20,20,0,0,0, 5,-5,-10,0,0,-10,-5,5, 5,10,10,-20,-20,10,10,5, 0,0,0,0,0,0,0,0]
 
@@ -82,8 +96,11 @@ def pawn_passed(board, sq):
     direction = 8 if color else -8
     for rank_offset in range(1, 7):
         test_sq = sq + rank_offset * direction
+<<<<<<< HEAD
         if test_sq not in chess.SQUARES:
             break
+=======
+>>>>>>> f1847196dd13e95688a02f74b6f8b9401c33ba07
         if test_sq in board.pieces(chess.PAWN, not color):
             return False
     return True
@@ -105,11 +122,40 @@ def evaluate_board(board):
         return -100000
     if board.is_game_over():
         return 0
+
+    # フェーズ推定: 非ポーン駒（キング除く）枚数で序盤/終盤を判定
+    non_pawn_non_king = (
+        len(board.pieces(chess.QUEEN, chess.WHITE)) + len(board.pieces(chess.QUEEN, chess.BLACK)) +
+        len(board.pieces(chess.ROOK, chess.WHITE)) + len(board.pieces(chess.ROOK, chess.BLACK)) +
+        len(board.pieces(chess.BISHOP, chess.WHITE)) + len(board.pieces(chess.BISHOP, chess.BLACK)) +
+        len(board.pieces(chess.KNIGHT, chess.WHITE)) + len(board.pieces(chess.KNIGHT, chess.BLACK))
+    )
+
+    is_endgame = non_pawn_non_king <= ENDGAME_NON_PAWN_PIECES
+
+    k_mob = K_MOB_END if is_endgame else K_MOB
+    k_att = K_ATT_END if is_endgame else K_ATT
+
+    # 終盤の「必要な駒の連動」を意識して、passed pawnだけでなく
+    # 駒交換後に価値が上がる要素（ビショップ/ルークの影響、キングの位置、
+    # 盤面の攻撃の質）を少し強める。ポーン連動に寄せすぎない。
+    passed_k = PASSED_PAWN_K_END if is_endgame else PASSED_PAWN_K
+
+    # 駒の数に応じて係数をフェーズ補正（より戦略的に）
+    num_pieces = len(board.piece_map())
+    # 盤上の駒数が少ないほど、キングと軽い駒の連動を優先
+    # （駒数が多い序盤は通常のpassed pawnを抑え気味）
+    piece_scaler = max(0.0, min(1.0, (20 - num_pieces) / 12))
+    # 終盤ほど passed_pawn は強めすぎないよう少し抑制
+    passed_k = passed_k * (1.0 - 0.35 * piece_scaler)
+
     score = _material(board) + _psqt(board)
+
     mob = mobility_score(board)
     att = attack_score(board)
-    score += int(K_MOB * mob + K_ATT * att)
-    score += passed_pawn_bonus(board)
+    score += int(k_mob * mob + k_att * att)
+    score += int(passed_k * passed_pawn_bonus(board) / 20)
+
     wk = board.king(chess.WHITE)
     bk = board.king(chess.BLACK)
     if wk is not None:
